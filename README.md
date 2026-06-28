@@ -23,6 +23,10 @@ Story Bible、剧情规划、章节生成、连续性检查和事实检查组织
 - 结合 Qwen 向量、关键词 RRF 和结构化过滤检索人物、地点、物品与事件状态。
 - 写作前检查人物位置、物品归属和年龄等跨章节冲突。
 - 检测与导入样文的长连续片段和 n-gram 重叠，降低复刻风险。
+- 由人物、世界观和伏笔 Agent 生成提案，并由作者显式决定是否写入 Canon。
+- 比较剧情候选并锁定方案，所选方案会随草稿和工作流全程保留。
+- 管理草稿读取、下载、拒绝、按意见修订、版本血缘和统一差异。
+- 提供 React Web 工作台以及 Agent 耗时、Token、成本和 Prompt 版本日志。
 
 ## 架构
 
@@ -112,6 +116,100 @@ RESEARCH_FETCH_ENABLED=true
 root 数据库账户只由 `novel-harness db init` 使用。应用运行时使用权限受限的
 `novel_agent` 账户。生产环境必须更换示例凭据并通过密钥管理系统注入。
 
+## 本地开发
+
+本项目可以直接连接已有的 MySQL、MinIO、Milvus、Redis 和 SearXNG，不要求使用
+仓库中的 `docker-compose.yml`。开始前请确认 `.env` 中的连接地址、账户和密钥与
+本地环境一致。
+
+首次安装：
+
+```bash
+cd /home/gxl77/codex_dev
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env
+```
+
+没有外部模型密钥时，可以在 `.env` 中使用离线 Provider：
+
+```dotenv
+LLM_PROVIDER=mock
+EMBEDDING_PROVIDER=deterministic
+SEARCH_PROVIDER=mock
+CACHE_PROVIDER=none
+CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:5173
+```
+
+### 启动后端
+
+首次启动或拉取到新迁移后，先升级数据库：
+
+```bash
+cd /home/gxl77/codex_dev
+source .venv/bin/activate
+novel-harness db migrate
+```
+
+启动 FastAPI 开发服务器：
+
+```bash
+uvicorn novel_harness.api:app \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --reload
+```
+
+后端地址：
+
+- API：`http://127.0.0.1:8000`
+- Swagger：`http://127.0.0.1:8000/docs`
+- 存活检查：`http://127.0.0.1:8000/health`
+- 依赖就绪检查：`http://127.0.0.1:8000/health/ready`
+
+### 启动前端
+
+在第二个终端执行：
+
+```bash
+cd /home/gxl77/codex_dev/web
+npm install
+VITE_API_URL=http://127.0.0.1:8000 npm run dev
+```
+
+浏览器访问 `http://127.0.0.1:5173`。
+
+### 启动工作流 Worker
+
+创建持久化章节工作流后，需要 Worker 执行队列任务。在第三个终端执行：
+
+```bash
+cd /home/gxl77/codex_dev
+source .venv/bin/activate
+novel-harness worker
+```
+
+调试单个步骤或处理完当前队列后退出：
+
+```bash
+novel-harness worker --once
+novel-harness worker --drain
+```
+
+默认日志写入 `logs/novel-harness.log`。本地开发常用检查命令：
+
+```bash
+pytest
+ruff check src tests migrations
+ruff format --check src tests migrations
+mypy src/novel_harness
+
+cd web
+npm run lint
+npm run build
+```
+
 ## CLI
 
 ```bash
@@ -147,6 +245,25 @@ novel-harness memory query PROJECT_ID "主角目前位于哪里"
 novel-harness memory extract PROJECT_ID DRAFT_ID
 novel-harness memory invalidate MEMORY_ID --reason "作者修正设定"
 novel-harness memory rebuild PROJECT_ID
+
+novel-harness agent character PROJECT_ID --name "林川" --role "主角" --apply
+novel-harness agent worldbuilding PROJECT_ID --goal "完善长安权力结构" --apply
+novel-harness agent foreshadowing PROJECT_ID --scene-goal "进入未央宫" --apply
+
+novel-harness bible add-rule PROJECT_ID "城门入夜关闭"
+novel-harness bible add-faction PROJECT_ID faction.json
+novel-harness bible add-location PROJECT_ID location.json
+novel-harness bible add-timeline PROJECT_ID timeline.json
+novel-harness bible resolve-foreshadowing PROJECT_ID ITEM_ID \
+  --resolution "铜符证明密使身份"
+
+novel-harness write PROJECT_ID --goal "通过城门" \
+  --plan-id PLAN_ID --option-id OPTION_ID
+novel-harness draft list PROJECT_ID
+novel-harness draft show DRAFT_ID
+novel-harness draft revise DRAFT_ID --instruction "减少巧合，强化主动选择"
+novel-harness draft diff OLD_DRAFT_ID NEW_DRAFT_ID
+novel-harness draft reject DRAFT_ID --reason "节奏不符合预期"
 ```
 
 `character.json` 示例：
@@ -204,6 +321,33 @@ curl -X POST http://127.0.0.1:8000/projects/PROJECT_ID/workflows \
 
 完整 OpenAPI 文档位于 `/docs`。`/health` 是进程存活检查，`/health/ready` 会检查
 MySQL、MinIO 和 Milvus。
+
+新增的作者闭环接口包括：
+
+- `POST /projects/{id}/agents/character|worldbuilding|foreshadowing`；
+- `POST /projects/{id}/bible/rules|factions|locations|timeline|foreshadowing`；
+- `POST /projects/{id}/plot/plans/{plan_id}/select`；
+- `GET /projects/{id}/drafts`、`GET /drafts/{id}` 和 `GET /drafts/{id}/download`；
+- `POST /drafts/{id}/revise|reject|accept` 与 `GET /drafts/{from}/diff/{to}`；
+- `GET /projects/{id}/agent-runs`。
+
+## Web 工作台
+
+`web/` 是 React 19、TypeScript 和 Vite 实现的作者工作台，包含项目概览、Story
+Bible 编辑、人物/世界观/伏笔提案、剧情方案对比、审批队列、章节修订与版本差异、
+长期记忆检索和 Agent 运行记录。
+
+```bash
+cd web
+npm install
+VITE_API_URL=http://localhost:8000 npm run dev
+
+# 生产构建
+npm run lint
+npm run build
+```
+
+后端通过 `CORS_ORIGINS` 配置允许的 Web 来源，多个来源使用逗号分隔。
 
 ## 持久化工作流
 
@@ -339,6 +483,60 @@ Milvus 可由 MySQL 文档元数据、长期记忆、已验证研究证据和 Mi
 `novel-harness vector rebuild PROJECT_ID` 可重建单项目索引。重建过程只写入
 `fetched/corroborated`、可信度不低于 0.5 且不是验证码/访问验证页的研究证据。
 
+### Agent 日志
+
+每次 Agent 调用都会写入 `agent_runs`，并输出不含正文和完整 Prompt 的结构化日志：
+`trace_id`、项目/工作流、Agent、Provider、模型、Prompt 内容哈希版本、耗时、输入/
+输出 Token、估算成本和错误类型。通过以下配置开启带轮转的文件日志：
+
+```dotenv
+LOG_FILE=logs/novel-harness.log
+LOG_MAX_BYTES=10485760
+LOG_BACKUP_COUNT=5
+LLM_INPUT_COST_PER_MILLION=0
+LLM_OUTPUT_COST_PER_MILLION=0
+```
+
+成本单价默认是 0，需按实际供应商账单填写每百万 Token 单价。
+
+### 备份和恢复演练
+
+备份包含 MySQL 一致性 dump、MinIO bucket 对象、SHA-256 清单。Milvus 是可重建
+索引，不作为权威备份。执行主机需要安装 MySQL 8 客户端：
+
+```bash
+novel-harness ops backup backups/novel-$(date +%F).tar.gz
+novel-harness ops verify backups/novel-2026-06-29.tar.gz
+
+# 恢复到隔离的演练数据库和 bucket，不覆盖生产数据
+novel-harness ops drill backups/novel-2026-06-29.tar.gz \
+  --target-database novel_agent_drill \
+  --target-bucket novel-agent-drill \
+  --confirm
+```
+
+演练后针对恢复项目执行 `novel-harness vector rebuild PROJECT_ID`。直接恢复需要
+`novel-harness ops restore ARCHIVE --confirm`，执行前必须停止 API/Worker 写入。
+
+## 容器部署
+
+项目不要求使用本仓库的 Compose；可直接连接共享中间件。根目录 `Dockerfile` 同时
+用于 API 和 Worker：
+
+```bash
+docker build --target api -t novel-harness-api:0.2.0 .
+docker build --target worker -t novel-harness-worker:0.2.0 .
+docker run --env-file .env -p 8000:8000 novel-harness-api:0.2.0
+docker run --env-file .env novel-harness-worker:0.2.0
+
+docker build -t novel-harness-web:0.2.0 \
+  --build-arg VITE_API_URL=https://novel-api.example.com web
+docker run -p 8080:80 novel-harness-web:0.2.0
+```
+
+API 收到终止信号后执行运行时资源清理；Worker 完成当前步骤后停止领取新任务。
+`/health/ready` 失败会写入告警日志，容器健康检查使用 `/health`。
+
 ## 安全、版权与限制
 
 - 只导入作者拥有或获授权使用的文本。
@@ -349,5 +547,5 @@ Milvus 可由 MySQL 文档元数据、长期记忆、已验证研究证据和 Mi
 - 历史、法律、医学、新闻、职业流程等事实必须带来源或标记不确定；重要内容应由
   作者回到一手、官方或学术来源复核。
 - 当前支持 txt、Markdown、docx 和可提取文本的 PDF；扫描 PDF 不包含 OCR。
-- 当前定位为本地单用户服务，不含鉴权、多租户、限流、任务队列或公网安全加固。
+- 当前定位为可信网络内的单用户服务，不含鉴权、多租户、限流或公网安全加固。
 - 日志不记录密钥和完整作者原文；不要把 `.env` 提交到版本库。

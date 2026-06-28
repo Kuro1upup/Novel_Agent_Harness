@@ -2,26 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, Field
-
+from novel_harness.models.creative import (
+    ForeshadowingAction,
+    ForeshadowingProposal,
+)
 from novel_harness.models.story_bible import StoryBible
 
 from ._base import call_provider, format_prompt, load_prompt
-
-
-class ForeshadowingAction(BaseModel):
-    action: Literal["plant", "reinforce", "payoff"]
-    description: str
-    subtle_expression: str
-    target_payoff: str
-    canon_risks: list[str] = Field(default_factory=list)
-
-
-class ForeshadowingProposal(BaseModel):
-    actions: list[ForeshadowingAction] = Field(default_factory=list)
-    deferred_items: list[str] = Field(default_factory=list)
 
 
 class ForeshadowingAgent:

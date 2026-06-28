@@ -17,6 +17,8 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
+from novel_harness.observability import observe_llm_response
+
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
@@ -202,6 +204,7 @@ async def call_provider_overlay(
         )
         if inspect.isawaitable(result):
             result = await result
+        observe_llm_response(result)
         result = getattr(result, "content", result)
     else:
         result = await call_provider(provider, prompt=prompt)

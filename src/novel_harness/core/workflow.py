@@ -99,6 +99,7 @@ class WorkflowWorker:
         *,
         poll_interval: float | None = None,
         max_idle_polls: int | None = None,
+        stop_event: asyncio.Event | None = None,
     ) -> None:
         interval = (
             self.runtime.settings.worker_poll_interval_seconds
@@ -109,6 +110,8 @@ class WorkflowWorker:
             raise ValueError("poll_interval must not be negative")
         idle_polls = 0
         while True:
+            if stop_event is not None and stop_event.is_set():
+                return
             worked = await self.run_once()
             if worked:
                 idle_polls = 0
@@ -116,7 +119,13 @@ class WorkflowWorker:
             idle_polls += 1
             if max_idle_polls is not None and idle_polls >= max_idle_polls:
                 return
-            await asyncio.sleep(interval)
+            if stop_event is None:
+                await asyncio.sleep(interval)
+                continue
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            except TimeoutError:
+                continue
 
     async def _execute_step(
         self,
@@ -161,6 +170,7 @@ class WorkflowWorker:
                 project_id,
                 current or "当前章节之后",
                 goal,
+                workflow_run_id=run.id,
             )
             return {
                 "plan_id": plan.id,
@@ -187,6 +197,12 @@ class WorkflowWorker:
                 goal,
                 current_summary=current,
                 plot_plan=plan,
+                selected_option_id=(
+                    str(run.parameters["selected_option_id"])
+                    if run.parameters.get("selected_option_id")
+                    else None
+                ),
+                workflow_run_id=run.id,
             )
             return {
                 "draft_id": draft.id,

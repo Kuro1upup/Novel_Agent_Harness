@@ -17,6 +17,9 @@ def test_cli_help_lists_required_commands() -> None:
         "check",
         "workflow",
         "memory",
+        "agent",
+        "ops",
+        "draft",
         "worker",
     ):
         assert command in result.stdout

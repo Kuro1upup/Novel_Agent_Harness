@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, File, Form, Request, UploadFile, status
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, File, Form, Request, Response, UploadFile, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -21,9 +25,21 @@ from novel_harness.exceptions import (
 )
 from novel_harness.logging_config import configure_logging
 from novel_harness.models import (
+    AgentRun,
+    BibleEntryRequest,
+    CharacterProposalRequest,
+    CharacterProposalResponse,
     CheckRequest,
     CheckResponse,
+    DraftDiffResponse,
+    DraftRejectRequest,
+    DraftRevisionRequest,
     ErrorResponse,
+    ForeshadowingCreateRequest,
+    ForeshadowingProposalRequest,
+    ForeshadowingProposalResponse,
+    ForeshadowingResolveRequest,
+    GenerationResult,
     MemoryInvalidateRequest,
     MemoryQueryRequest,
     MemoryQueryResponse,
@@ -32,16 +48,20 @@ from novel_harness.models import (
     NovelProject,
     PlotPlan,
     PlotRequest,
+    PlotSelectionRequest,
     ProjectCreate,
     ResearchNote,
     ResearchRequest,
     StoryBible,
     StyleProfile,
+    TimelineEventRequest,
     WorkflowApprovalRequest,
     WorkflowCreateRequest,
     WorkflowRetryRequest,
     WorkflowRun,
     WorkflowRunDetail,
+    WorldbuildingProposalRequest,
+    WorldbuildingProposalResponse,
     WriteRequest,
     WriteResponse,
 )
@@ -54,6 +74,8 @@ from novel_harness.storage import (
     check_database,
     session_scope,
 )
+
+logger = logging.getLogger("novel_harness.api")
 
 
 async def get_runtime(request: Request) -> Runtime:
@@ -77,11 +99,34 @@ def create_app(
     runtime: Runtime | None = None,
 ) -> FastAPI:
     runtime = runtime or Runtime(settings)
-    configure_logging(runtime.settings.log_level)
+    configure_logging(
+        runtime.settings.log_level,
+        log_file=runtime.settings.log_file,
+        max_bytes=runtime.settings.log_max_bytes,
+        backup_count=runtime.settings.log_backup_count,
+    )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+        logger.info(json.dumps({"event": "api_started"}, separators=(",", ":")))
+        try:
+            yield
+        finally:
+            logger.info(json.dumps({"event": "api_stopping"}, separators=(",", ":")))
+            runtime.close()
+
     app = FastAPI(
         title="Novel Agent Harness",
-        version="0.1.0",
+        version="0.2.0",
         description="Provider-neutral long-form fiction writing agent harness.",
+        lifespan=lifespan,
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=runtime.settings.cors_origin_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
     app.state.runtime = runtime
     _register_error_handlers(app)
@@ -115,6 +160,13 @@ def create_app(
         )
         required = [value for name, value in checks.items() if name != "redis_optional"]
         code = status.HTTP_200_OK if all(required) else status.HTTP_503_SERVICE_UNAVAILABLE
+        if code != status.HTTP_200_OK:
+            logger.warning(
+                json.dumps(
+                    {"event": "readiness_failed", "checks": checks},
+                    separators=(",", ":"),
+                )
+            )
         return JSONResponse(
             {"status": "ready" if code == 200 else "not_ready", "checks": checks},
             code,
@@ -178,6 +230,137 @@ def create_app(
     async def get_bible(project_id: str, session: SessionDep) -> StoryBible:
         return StoryBibleService(session).get(project_id)
 
+    @app.post(
+        "/projects/{project_id}/agents/character",
+        response_model=CharacterProposalResponse,
+    )
+    async def propose_character(
+        project_id: str,
+        payload: CharacterProposalRequest,
+        session: SessionDep,
+        rt: RuntimeDep,
+    ) -> CharacterProposalResponse:
+        proposal, bible = await rt.creative_service(session).propose_character(
+            project_id,
+            **payload.model_dump(),
+        )
+        return CharacterProposalResponse(proposal=proposal, bible=bible)
+
+    @app.post(
+        "/projects/{project_id}/agents/worldbuilding",
+        response_model=WorldbuildingProposalResponse,
+    )
+    async def propose_worldbuilding(
+        project_id: str,
+        payload: WorldbuildingProposalRequest,
+        session: SessionDep,
+        rt: RuntimeDep,
+    ) -> WorldbuildingProposalResponse:
+        proposal, bible = await rt.creative_service(session).propose_worldbuilding(
+            project_id,
+            **payload.model_dump(),
+        )
+        return WorldbuildingProposalResponse(proposal=proposal, bible=bible)
+
+    @app.post(
+        "/projects/{project_id}/agents/foreshadowing",
+        response_model=ForeshadowingProposalResponse,
+    )
+    async def propose_foreshadowing(
+        project_id: str,
+        payload: ForeshadowingProposalRequest,
+        session: SessionDep,
+        rt: RuntimeDep,
+    ) -> ForeshadowingProposalResponse:
+        proposal, bible = await rt.creative_service(session).propose_foreshadowing(
+            project_id,
+            **payload.model_dump(),
+        )
+        return ForeshadowingProposalResponse(proposal=proposal, bible=bible)
+
+    @app.post("/projects/{project_id}/bible/rules", response_model=StoryBible)
+    async def add_bible_rule(
+        project_id: str,
+        payload: BibleEntryRequest,
+        session: SessionDep,
+    ) -> StoryBible:
+        return StoryBibleService(session).add_rule(
+            project_id,
+            payload.value,
+            expected_version=payload.expected_version,
+        )
+
+    @app.post("/projects/{project_id}/bible/factions", response_model=StoryBible)
+    async def add_bible_faction(
+        project_id: str,
+        payload: BibleEntryRequest,
+        session: SessionDep,
+    ) -> StoryBible:
+        if not isinstance(payload.value, dict):
+            raise ValueError("faction must be an object")
+        return StoryBibleService(session).add_faction(
+            project_id,
+            payload.value,
+            expected_version=payload.expected_version,
+        )
+
+    @app.post("/projects/{project_id}/bible/locations", response_model=StoryBible)
+    async def add_bible_location(
+        project_id: str,
+        payload: BibleEntryRequest,
+        session: SessionDep,
+    ) -> StoryBible:
+        if not isinstance(payload.value, dict):
+            raise ValueError("location must be an object")
+        return StoryBibleService(session).add_location(
+            project_id,
+            payload.value,
+            expected_version=payload.expected_version,
+        )
+
+    @app.post("/projects/{project_id}/bible/timeline", response_model=StoryBible)
+    async def add_bible_timeline(
+        project_id: str,
+        payload: TimelineEventRequest,
+        session: SessionDep,
+    ) -> StoryBible:
+        return StoryBibleService(session).add_timeline_event(
+            project_id,
+            payload.to_event(project_id),
+            expected_version=payload.expected_version,
+        )
+
+    @app.post("/projects/{project_id}/bible/foreshadowing", response_model=StoryBible)
+    async def add_bible_foreshadowing(
+        project_id: str,
+        payload: ForeshadowingCreateRequest,
+        session: SessionDep,
+    ) -> StoryBible:
+        return StoryBibleService(session).add_foreshadowing(
+            project_id,
+            payload.description,
+            planted_at=payload.planted_at,
+            expected_payoff=payload.expected_payoff,
+            expected_version=payload.expected_version,
+        )
+
+    @app.post(
+        "/projects/{project_id}/bible/foreshadowing/{item_id}/resolve",
+        response_model=StoryBible,
+    )
+    async def resolve_bible_foreshadowing(
+        project_id: str,
+        item_id: str,
+        payload: ForeshadowingResolveRequest,
+        session: SessionDep,
+    ) -> StoryBible:
+        return StoryBibleService(session).resolve_foreshadowing(
+            project_id,
+            item_id,
+            resolution=payload.resolution,
+            expected_version=payload.expected_version,
+        )
+
     @app.post("/projects/{project_id}/plot/plan", response_model=PlotPlan)
     async def plan(
         project_id: str,
@@ -187,6 +370,23 @@ def create_app(
     ) -> PlotPlan:
         return await rt.generation_service(session).plan(project_id, payload.current, payload.goal)
 
+    @app.post(
+        "/projects/{project_id}/plot/plans/{plan_id}/select",
+        response_model=PlotPlan,
+    )
+    async def select_plot_option(
+        project_id: str,
+        plan_id: str,
+        payload: PlotSelectionRequest,
+        session: SessionDep,
+        rt: RuntimeDep,
+    ) -> PlotPlan:
+        return rt.generation_service(session).select_plot_option(
+            project_id,
+            plan_id,
+            payload.option_id,
+        )
+
     @app.post("/projects/{project_id}/write", response_model=WriteResponse)
     async def write(
         project_id: str,
@@ -194,8 +394,18 @@ def create_app(
         session: SessionDep,
         rt: RuntimeDep,
     ) -> WriteResponse:
-        draft, issues, risks, originality, patch_id = await rt.generation_service(session).write(
-            project_id, payload.goal, current_summary=payload.current
+        generation = rt.generation_service(session)
+        plot_plan = (
+            generation.repositories.plot_plans.require(payload.plot_plan_id)
+            if payload.plot_plan_id
+            else None
+        )
+        draft, issues, risks, originality, patch_id = await generation.write(
+            project_id,
+            payload.goal,
+            current_summary=payload.current,
+            plot_plan=plot_plan,
+            selected_option_id=payload.selected_option_id,
         )
         return WriteResponse(
             draft=draft,
@@ -217,15 +427,100 @@ def create_app(
 
     @app.post("/drafts/{draft_id}/accept", response_model=StoryBible)
     async def accept_draft(draft_id: str, session: SessionDep) -> StoryBible:
-        patches = [
-            patch
-            for project in ProjectService(session).list()
-            for patch in StoryBibleService(session).repositories.canon_patches.list(project.id)
-            if patch.draft_id == draft_id
-        ]
-        if not patches:
+        service = StoryBibleService(session)
+        patch = service.repositories.canon_patches.get_by_draft(draft_id)
+        if patch is None:
             raise ResourceNotFoundError(f"canon patch for draft {draft_id!r} not found")
-        return StoryBibleService(session).accept_patch(patches[0].id)
+        return service.accept_patch(patch.id)
+
+    @app.get("/projects/{project_id}/drafts", response_model=list[GenerationResult])
+    async def list_drafts(
+        project_id: str,
+        session: SessionDep,
+        rt: RuntimeDep,
+        draft_status: str | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> list[GenerationResult]:
+        return rt.generation_service(session).list_drafts(
+            project_id,
+            status=draft_status,
+            offset=max(offset, 0),
+            limit=min(max(limit, 1), 1000),
+        )
+
+    @app.get("/drafts/{draft_id}", response_model=GenerationResult)
+    async def get_draft(
+        draft_id: str,
+        session: SessionDep,
+        rt: RuntimeDep,
+    ) -> GenerationResult:
+        return rt.generation_service(session).get_draft(draft_id)
+
+    @app.get("/drafts/{draft_id}/download")
+    async def download_draft(
+        draft_id: str,
+        session: SessionDep,
+        rt: RuntimeDep,
+    ) -> Response:
+        draft = rt.generation_service(session).get_draft(draft_id)
+        return PlainTextResponse(
+            draft.body,
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{draft.id}.md"'},
+        )
+
+    @app.post("/drafts/{draft_id}/reject", response_model=GenerationResult)
+    async def reject_draft(
+        draft_id: str,
+        payload: DraftRejectRequest,
+        session: SessionDep,
+        rt: RuntimeDep,
+    ) -> GenerationResult:
+        return rt.generation_service(session).reject_draft(
+            draft_id,
+            reason=payload.reason,
+        )
+
+    @app.post("/drafts/{draft_id}/revise", response_model=WriteResponse)
+    async def revise_draft(
+        draft_id: str,
+        payload: DraftRevisionRequest,
+        session: SessionDep,
+        rt: RuntimeDep,
+    ) -> WriteResponse:
+        draft, issues, risks, originality, patch_id = await rt.generation_service(
+            session
+        ).revise_draft(
+            draft_id,
+            instruction=payload.instruction,
+        )
+        return WriteResponse(
+            draft=draft,
+            continuity_issues=issues,
+            fact_risks=risks,
+            originality=asdict(originality),
+            canon_patch_id=patch_id,
+        )
+
+    @app.get(
+        "/drafts/{from_draft_id}/diff/{to_draft_id}",
+        response_model=DraftDiffResponse,
+    )
+    async def compare_drafts(
+        from_draft_id: str,
+        to_draft_id: str,
+        session: SessionDep,
+        rt: RuntimeDep,
+    ) -> DraftDiffResponse:
+        return DraftDiffResponse(
+            from_draft_id=from_draft_id,
+            to_draft_id=to_draft_id,
+            unified_diff=rt.generation_service(session).compare_drafts(
+                from_draft_id,
+                to_draft_id,
+            ),
+        )
 
     @app.post(
         "/projects/{project_id}/workflows",
@@ -283,6 +578,7 @@ def create_app(
             decision=payload.decision,
             actor=payload.actor,
             note=payload.note,
+            selected_option_id=payload.selected_option_id,
         )
 
     @app.post("/workflows/{run_id}/retry", response_model=WorkflowRunDetail)
@@ -375,6 +671,18 @@ def create_app(
         rt: RuntimeDep,
     ) -> dict[str, int]:
         return await rt.memory_service(session).rebuild(project_id)
+
+    @app.get("/projects/{project_id}/agent-runs", response_model=list[AgentRun])
+    async def list_agent_runs(
+        project_id: str,
+        session: SessionDep,
+        rt: RuntimeDep,
+        limit: int = 100,
+    ) -> list[AgentRun]:
+        return rt.agent_run_service(session).list(
+            project_id,
+            limit=min(max(limit, 1), 1000),
+        )
 
     return app
 

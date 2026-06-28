@@ -21,6 +21,9 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     log_level: str = "INFO"
+    log_file: Path | None = Path("logs/novel-harness.log")
+    log_max_bytes: int = 10 * 1024 * 1024
+    log_backup_count: int = 5
 
     database_host: str = "localhost"
     database_port: int = 3306
@@ -52,6 +55,8 @@ class Settings(BaseSettings):
     llm_model: str = "deepseek-v4-flash"
     deepseek_api_key: str = ""
     llm_supports_json_schema: bool = False
+    llm_input_cost_per_million: float = Field(default=0.0, ge=0)
+    llm_output_cost_per_million: float = Field(default=0.0, ge=0)
 
     search_provider: Literal["mock", "searxng"] = "searxng"
     searxng_base_url: str = "https://searxng.dsppt.site"
@@ -76,6 +81,7 @@ class Settings(BaseSettings):
     originality_max_contiguous_chars: int = 24
     originality_max_ngram_overlap: float = Field(default=0.35, ge=0, le=1)
     max_upload_bytes: int = 20 * 1024 * 1024
+    cors_origins: str = "http://localhost:5173"
     prompt_directory: Path = Path(__file__).parent / "prompts"
 
     @field_validator("minio_endpoint")
@@ -100,6 +106,10 @@ class Settings(BaseSettings):
             f"mysql+pymysql://{user}:{password}@{self.database_host}:"
             f"{self.database_port}/?charset=utf8mb4"
         )
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
 
 
 @lru_cache

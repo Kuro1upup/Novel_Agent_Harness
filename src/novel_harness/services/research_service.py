@@ -17,6 +17,8 @@ from novel_harness.providers.objectstore import ObjectStore
 from novel_harness.providers.vectorstore import VectorRecord, VectorStore
 from novel_harness.storage.repositories import Repositories
 
+from .agent_run_service import AgentRunService
+
 
 class ResearchService:
     def __init__(
@@ -29,6 +31,7 @@ class ResearchService:
         vector_store: VectorStore | None = None,
         embedding_provider: EmbeddingProvider | None = None,
         max_fetches: int = 5,
+        agent_runs: AgentRunService | None = None,
     ) -> None:
         self.repositories = Repositories(session)
         self.agent = agent
@@ -37,6 +40,7 @@ class ResearchService:
         self.vector_store = vector_store
         self.embedding_provider = embedding_provider
         self.max_fetches = max_fetches
+        self.agent_runs = agent_runs
 
     async def research(
         self,
@@ -47,12 +51,25 @@ class ResearchService:
         keywords: Sequence[str] | None = None,
     ) -> list[ResearchNote]:
         project = self.repositories.projects.require(project_id)
-        notes = await self.agent.research(
-            genre=project.genre,
-            historical_context=historical_context or (project.sub_genre or ""),
-            keywords=keywords,
-            story_need=topic,
-            project_id=project_id,
+
+        async def operation() -> list[ResearchNote]:
+            return await self.agent.research(
+                genre=project.genre,
+                historical_context=historical_context or (project.sub_genre or ""),
+                keywords=keywords,
+                story_need=topic,
+                project_id=project_id,
+            )
+
+        notes = (
+            await self.agent_runs.execute(
+                project_id,
+                "research_agent",
+                operation,
+                input_summary=f"topic_chars={len(topic)};keywords={len(keywords or [])}",
+            )
+            if self.agent_runs is not None
+            else await operation()
         )
         uploaded_keys: list[str] = []
         indexed_ids: list[str] = []

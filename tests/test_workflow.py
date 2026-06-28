@@ -5,7 +5,7 @@ from datetime import timedelta
 import pytest
 
 from novel_harness.core.workflow import WorkflowWorker
-from novel_harness.models import utc_now
+from novel_harness.models import PlotOption, PlotPlan, utc_now
 from novel_harness.services import ProjectService, StoryBibleService, WorkflowService
 from novel_harness.storage import session_scope
 
@@ -82,6 +82,48 @@ def test_workflow_waits_for_and_accepts_plot_approval(session) -> None:
         "actor": "author",
         "note": "采用第一方案",
     }
+
+
+def test_plot_approval_persists_explicit_option_selection(session) -> None:
+    project = ProjectService(session).create(name="长安", genre="历史")
+    service = WorkflowService(session)
+    plan = PlotPlan(project_id=project.id, current_arc="入城")
+    option = PlotOption(
+        project_id=project.id,
+        plot_plan_id=plan.id,
+        title="主动查验",
+        summary="主角主动寻找文书漏洞",
+    )
+    plan = plan.model_copy(update={"next_chapter_options": [option]})
+    service.repositories.plot_plans.add(plan)
+    service.repositories.plot_options.add(option)
+    detail = service.create_chapter_workflow(project.id, goal="进入长安")
+    run = detail.run.model_copy(
+        update={
+            "status": "waiting_approval",
+            "current_step": "plot_approval",
+            "result": {"plan": {"plan_id": plan.id}},
+        }
+    )
+    service.repositories.workflow_runs.update(run)
+    for step in detail.steps:
+        if step.name == "plot_approval":
+            service.repositories.workflow_steps.update(
+                step.model_copy(update={"status": "waiting_approval"})
+            )
+
+    approved = service.decide_approval(
+        run.id,
+        "plot_approval",
+        decision="approve",
+        actor="author",
+        selected_option_id=option.id,
+    )
+
+    assert approved.run.parameters["selected_option_id"] == option.id
+    assert service.repositories.plot_plans.require(plan.id).selected_option_id == option.id
+    approval = next(step for step in approved.steps if step.name == "plot_approval")
+    assert approval.result["selected_option_id"] == option.id
 
 
 def test_failed_workflow_can_be_retried_from_failed_step(session) -> None:

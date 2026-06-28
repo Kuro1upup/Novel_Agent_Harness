@@ -8,14 +8,17 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from novel_harness.agents import (
+    CharacterAgent,
     ContinuityChecker,
     FactChecker,
+    ForeshadowingAgent,
     MemoryExtractor,
     PlotPlanner,
     ResearchAgent,
     RevisionAgent,
     SceneWriter,
     StyleAnalyzer,
+    WorldbuildingAgent,
 )
 from novel_harness.config import Settings, get_settings
 from novel_harness.providers import (
@@ -35,6 +38,8 @@ from novel_harness.providers import (
     build_vector_store,
 )
 from novel_harness.services import (
+    AgentRunService,
+    CreativeService,
     DocumentService,
     GenerationService,
     MemoryService,
@@ -128,6 +133,7 @@ class Runtime:
             vector_store=self.vector_store,
             embedding_provider=self.embedding_provider,
             max_fetches=self.settings.research_fetch_max_sources,
+            agent_runs=self.agent_run_service(session, provider=llm),
         )
 
     def memory_service(self, session: Session) -> MemoryService:
@@ -140,6 +146,7 @@ class Runtime:
             extractor=MemoryExtractor(llm),
             cache_provider=self.cache_provider,
             cache_ttl_seconds=self.settings.redis_cache_ttl_seconds,
+            agent_runs=self.agent_run_service(session, provider=llm),
         )
 
     def generation_service(self, session: Session) -> GenerationService:
@@ -159,4 +166,70 @@ class Runtime:
             originality_max_ngram_overlap=(self.settings.originality_max_ngram_overlap),
             context_max_characters=self.settings.context_max_characters,
             context_retrieval_limit=self.settings.context_retrieval_limit,
+            agent_runs=self.agent_run_service(session, provider=llm),
         )
+
+    def agent_run_service(
+        self,
+        session: Session,
+        *,
+        provider: LLMProvider | None = None,
+    ) -> AgentRunService:
+        selected = provider
+        if selected is None and self.settings.llm_provider != "mock":
+            selected = self.llm_provider
+        return AgentRunService(
+            session,
+            provider=selected,
+            input_cost_per_million=self.settings.llm_input_cost_per_million,
+            output_cost_per_million=self.settings.llm_output_cost_per_million,
+            persistence_factory=(
+                self.session_factory
+                if session.bind is not None and session.bind.dialect.name != "sqlite"
+                else None
+            ),
+        )
+
+    def creative_service(self, session: Session) -> CreativeService:
+        llm = None if self.settings.llm_provider == "mock" else self.llm_provider
+        return CreativeService(
+            session,
+            character_agent=CharacterAgent(llm),
+            worldbuilding_agent=WorldbuildingAgent(llm),
+            foreshadowing_agent=ForeshadowingAgent(llm),
+            agent_runs=self.agent_run_service(session, provider=llm),
+        )
+
+    def close(self) -> None:
+        """Best-effort shutdown for injected or long-lived provider clients."""
+
+        values = [
+            self.__dict__.get(name)
+            for name in (
+                "llm_provider",
+                "search_provider",
+                "object_store",
+                "vector_store",
+                "embedding_provider",
+                "content_fetcher",
+                "cache_provider",
+            )
+        ]
+        values.extend(
+            (
+                self._llm_provider,
+                self._search_provider,
+                self._object_store,
+                self._vector_store,
+                self._embedding_provider,
+                self._content_fetcher,
+                self._cache_provider,
+            )
+        )
+        for value in {id(item): item for item in values if item is not None}.values():
+            close = getattr(value, "close", None)
+            if callable(close):
+                close()
+        engine = self._engine or self.__dict__.get("engine")
+        if engine is not None:
+            engine.dispose()

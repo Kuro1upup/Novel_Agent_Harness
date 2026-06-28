@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from novel_harness.agents import MemoryExtractor
 from novel_harness.models import (
     MemoryConflict,
+    MemoryExtraction,
     MemoryRecord,
     MemorySearchHit,
     MemoryState,
@@ -22,6 +23,7 @@ from novel_harness.providers.embedding import EmbeddingProvider
 from novel_harness.providers.vectorstore import VectorRecord, VectorStore
 from novel_harness.storage.repositories import Repositories
 
+from .agent_run_service import AgentRunService
 from .story_bible_service import StoryBibleService
 
 STATEFUL_KINDS = {
@@ -44,6 +46,7 @@ class MemoryService:
         extractor: MemoryExtractor,
         cache_provider: CacheProvider | None = None,
         cache_ttl_seconds: int = 900,
+        agent_runs: AgentRunService | None = None,
     ) -> None:
         self.session = session
         self.repositories = Repositories(session)
@@ -53,6 +56,7 @@ class MemoryService:
         self.extractor = extractor
         self.cache = cache_provider or NullCacheProvider()
         self.cache_ttl_seconds = cache_ttl_seconds
+        self.agent_runs = agent_runs
 
     def state(self, project_id: str) -> MemoryState:
         self.repositories.projects.require(project_id)
@@ -76,7 +80,20 @@ class MemoryService:
         body = self.object_store.get_bytes(draft.object_key).decode("utf-8")
         bible = StoryBibleService(self.session).get(project_id)
         version = canon_version or self._accepted_canon_version(draft_id) or bible.version
-        extraction = await self.extractor.run(body, bible, draft_id=draft_id)
+
+        async def operation() -> MemoryExtraction:
+            return await self.extractor.run(body, bible, draft_id=draft_id)
+
+        extraction = (
+            await self.agent_runs.execute(
+                project_id,
+                "memory_extractor",
+                operation,
+                input_summary=f"draft_id={draft_id};body_chars={len(body)}",
+            )
+            if self.agent_runs is not None
+            else await operation()
+        )
 
         created: list[MemoryRecord] = []
         superseded: list[MemoryRecord] = []

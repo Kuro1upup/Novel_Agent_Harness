@@ -360,6 +360,16 @@ class PlotOptionRepository(JsonRepository[PlotOption]):
     def _extra_values(self, model: PlotOption) -> dict[str, Any]:
         return {"plot_plan_id": model.plot_plan_id, "title": model.title}
 
+    def list_for_plan(self, plot_plan_id: str) -> list[PlotOption]:
+        statement = (
+            select(PlotOptionORM)
+            .where(PlotOptionORM.plot_plan_id == plot_plan_id)
+            .order_by(PlotOptionORM.created_at)
+        )
+        return [
+            PlotOption.model_validate(record.payload) for record in self.session.scalars(statement)
+        ]
+
 
 class GenerationRepository(JsonRepository[GenerationResult]):
     domain_model = GenerationResult
@@ -381,7 +391,30 @@ class GenerationRepository(JsonRepository[GenerationResult]):
             "status": model.status,
             "object_key": model.object_key,
             "bible_version": model.bible_version,
+            "plot_plan_id": model.plot_plan_id,
+            "selected_option_id": model.selected_option_id,
+            "parent_draft_id": model.parent_draft_id,
+            "revision_number": model.revision_number,
         }
+
+    def list_by_status(
+        self,
+        project_id: str,
+        *,
+        status: str | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> list[GenerationResult]:
+        statement = select(GenerationResultORM).where(GenerationResultORM.project_id == project_id)
+        if status:
+            statement = statement.where(GenerationResultORM.status == status)
+        statement = (
+            statement.order_by(GenerationResultORM.created_at.desc()).offset(offset).limit(limit)
+        )
+        return [
+            GenerationResult.model_validate(record.payload)
+            for record in self.session.scalars(statement)
+        ]
 
 
 class ContinuityIssueRepository(JsonRepository[ContinuityIssue]):
@@ -395,6 +428,17 @@ class ContinuityIssueRepository(JsonRepository[ContinuityIssue]):
             "severity": model.severity,
         }
 
+    def list_for_draft(self, draft_id: str) -> list[ContinuityIssue]:
+        statement = (
+            select(ContinuityIssueORM)
+            .where(ContinuityIssueORM.draft_id == draft_id)
+            .order_by(ContinuityIssueORM.created_at)
+        )
+        return [
+            ContinuityIssue.model_validate(record.payload)
+            for record in self.session.scalars(statement)
+        ]
+
 
 class FactRiskRepository(JsonRepository[FactRisk]):
     domain_model = FactRisk
@@ -402,6 +446,16 @@ class FactRiskRepository(JsonRepository[FactRisk]):
 
     def _extra_values(self, model: FactRisk) -> dict[str, Any]:
         return {"draft_id": model.draft_id, "risk_level": model.risk_level}
+
+    def list_for_draft(self, draft_id: str) -> list[FactRisk]:
+        statement = (
+            select(FactRiskORM)
+            .where(FactRiskORM.draft_id == draft_id)
+            .order_by(FactRiskORM.created_at)
+        )
+        return [
+            FactRisk.model_validate(record.payload) for record in self.session.scalars(statement)
+        ]
 
 
 class DocumentRepository(JsonRepository[Document]):
@@ -454,6 +508,12 @@ class CanonPatchRepository(JsonRepository[CanonPatch]):
             "status": model.status,
         }
 
+    def get_by_draft(self, draft_id: str) -> CanonPatch | None:
+        record = self.session.scalar(
+            select(CanonPatchORM).where(CanonPatchORM.draft_id == draft_id)
+        )
+        return CanonPatch.model_validate(record.payload) if record else None
+
 
 class AgentRunRepository(JsonRepository[AgentRun]):
     domain_model = AgentRun
@@ -467,6 +527,13 @@ class AgentRunRepository(JsonRepository[AgentRun]):
             "started_at": model.started_at,
             "finished_at": model.finished_at,
             "duration_ms": model.duration_ms,
+            "model": model.model,
+            "prompt_version": model.prompt_version,
+            "prompt_tokens": model.prompt_tokens,
+            "completion_tokens": model.completion_tokens,
+            "estimated_cost": model.estimated_cost,
+            "workflow_run_id": model.workflow_run_id,
+            "trace_id": model.trace_id,
         }
 
 

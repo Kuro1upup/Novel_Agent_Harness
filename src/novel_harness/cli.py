@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import signal
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -18,7 +20,7 @@ from novel_harness.core.workflow import WorkflowWorker
 from novel_harness.logging_config import configure_logging
 from novel_harness.models import CharacterProfile
 from novel_harness.runtime import Runtime
-from novel_harness.services import ProjectService, StoryBibleService, WorkflowService
+from novel_harness.services import OpsService, ProjectService, StoryBibleService, WorkflowService
 from novel_harness.storage import (
     check_database,
     provision_mysql,
@@ -37,6 +39,8 @@ db_app = typer.Typer(help="Initialize and migrate MySQL.")
 vector_app = typer.Typer(help="Maintain Milvus indexes.")
 workflow_app = typer.Typer(help="Create and control durable chapter workflows.")
 memory_app = typer.Typer(help="Query and rebuild accepted-chapter memory.")
+agent_app = typer.Typer(help="Generate author-controlled creative proposals.")
+ops_app = typer.Typer(help="Back up, verify, restore, and drill shared infrastructure data.")
 app.add_typer(bible_app, name="bible")
 app.add_typer(draft_app, name="draft")
 app.add_typer(infra_app, name="infra")
@@ -44,6 +48,8 @@ app.add_typer(db_app, name="db")
 app.add_typer(vector_app, name="vector")
 app.add_typer(workflow_app, name="workflow")
 app.add_typer(memory_app, name="memory")
+app.add_typer(agent_app, name="agent")
+app.add_typer(ops_app, name="ops")
 
 _runtime: Runtime | None = None
 
@@ -52,7 +58,12 @@ def runtime() -> Runtime:
     global _runtime
     if _runtime is None:
         settings = get_settings()
-        configure_logging(settings.log_level)
+        configure_logging(
+            settings.log_level,
+            log_file=settings.log_file,
+            max_bytes=settings.log_max_bytes,
+            backup_count=settings.log_backup_count,
+        )
         _runtime = Runtime(settings)
     return _runtime
 
@@ -144,6 +155,149 @@ def bible_add_foreshadowing(project_id: str, description: str) -> None:
         output(StoryBibleService(session).add_foreshadowing(project_id, description))
 
 
+def _read_json_object(path: Path, label: str) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise typer.BadParameter(f"{label} JSON must be an object")
+    return value
+
+
+@bible_app.command("add-rule")
+def bible_add_rule(project_id: str, rule: str) -> None:
+    with session_scope(runtime().session_factory) as session:
+        output(StoryBibleService(session).add_rule(project_id, rule))
+
+
+@bible_app.command("add-faction")
+def bible_add_faction(
+    project_id: str,
+    payload: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
+) -> None:
+    with session_scope(runtime().session_factory) as session:
+        output(
+            StoryBibleService(session).add_faction(
+                project_id,
+                _read_json_object(payload, "faction"),
+            )
+        )
+
+
+@bible_app.command("add-location")
+def bible_add_location(
+    project_id: str,
+    payload: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
+) -> None:
+    with session_scope(runtime().session_factory) as session:
+        output(
+            StoryBibleService(session).add_location(
+                project_id,
+                _read_json_object(payload, "location"),
+            )
+        )
+
+
+@bible_app.command("add-timeline")
+def bible_add_timeline(
+    project_id: str,
+    payload: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
+) -> None:
+    with session_scope(runtime().session_factory) as session:
+        output(
+            StoryBibleService(session).add_timeline_event(
+                project_id,
+                _read_json_object(payload, "timeline event"),
+            )
+        )
+
+
+@bible_app.command("resolve-foreshadowing")
+def bible_resolve_foreshadowing(
+    project_id: str,
+    item_id: str,
+    resolution: str = typer.Option(..., "--resolution"),
+) -> None:
+    with session_scope(runtime().session_factory) as session:
+        output(
+            StoryBibleService(session).resolve_foreshadowing(
+                project_id,
+                item_id,
+                resolution=resolution,
+            )
+        )
+
+
+@agent_app.command("character")
+def agent_character(
+    project_id: str,
+    name: str = typer.Option(..., "--name"),
+    role: str = typer.Option("", "--role"),
+    brief: str = typer.Option("", "--brief"),
+    apply: bool = typer.Option(False, "--apply"),
+) -> None:
+    async def run() -> Any:
+        with session_scope(runtime().session_factory) as session:
+            proposal, bible = (
+                await runtime()
+                .creative_service(session)
+                .propose_character(
+                    project_id,
+                    name=name,
+                    role=role,
+                    brief=brief,
+                    apply=apply,
+                )
+            )
+            return {"proposal": proposal, "bible": bible}
+
+    output(asyncio.run(run()))
+
+
+@agent_app.command("worldbuilding")
+def agent_worldbuilding(
+    project_id: str,
+    goal: str = typer.Option(..., "--goal"),
+    apply: bool = typer.Option(False, "--apply"),
+) -> None:
+    async def run() -> Any:
+        with session_scope(runtime().session_factory) as session:
+            proposal, bible = (
+                await runtime()
+                .creative_service(session)
+                .propose_worldbuilding(
+                    project_id,
+                    goal=goal,
+                    apply=apply,
+                )
+            )
+            return {"proposal": proposal, "bible": bible}
+
+    output(asyncio.run(run()))
+
+
+@agent_app.command("foreshadowing")
+def agent_foreshadowing(
+    project_id: str,
+    scene_goal: str = typer.Option(..., "--scene-goal"),
+    max_actions: int = typer.Option(3, "--max-actions", min=1, max=10),
+    apply: bool = typer.Option(False, "--apply"),
+) -> None:
+    async def run() -> Any:
+        with session_scope(runtime().session_factory) as session:
+            proposal, bible = (
+                await runtime()
+                .creative_service(session)
+                .propose_foreshadowing(
+                    project_id,
+                    scene_goal=scene_goal,
+                    max_actions=max_actions,
+                    apply=apply,
+                )
+            )
+            return {"proposal": proposal, "bible": bible}
+
+    output(asyncio.run(run()))
+
+
 @app.command("plan")
 def plan(
     project_id: str,
@@ -162,13 +316,19 @@ def write(
     project_id: str,
     goal: str = typer.Option(..., "--goal"),
     current: str = typer.Option("", "--current"),
+    plan_id: str | None = typer.Option(None, "--plan-id"),
+    option_id: str | None = typer.Option(None, "--option-id"),
 ) -> None:
     async def run() -> dict[str, Any]:
         with session_scope(runtime().session_factory) as session:
-            draft, issues, risks, originality, patch_id = (
-                await runtime()
-                .generation_service(session)
-                .write(project_id, goal, current_summary=current)
+            service = runtime().generation_service(session)
+            selected_plan = service.repositories.plot_plans.require(plan_id) if plan_id else None
+            draft, issues, risks, originality, patch_id = await service.write(
+                project_id,
+                goal,
+                current_summary=current,
+                plot_plan=selected_plan,
+                selected_option_id=option_id,
             )
             return {
                 "draft": draft.model_dump(mode="json"),
@@ -201,16 +361,77 @@ def check(
 @draft_app.command("accept")
 def draft_accept(draft_id: str) -> None:
     with session_scope(runtime().session_factory) as session:
-        repositories = StoryBibleService(session).repositories
-        matches = [
-            patch
-            for project in repositories.projects.list()
-            for patch in repositories.canon_patches.list(project.id)
-            if patch.draft_id == draft_id
-        ]
-        if not matches:
+        service = StoryBibleService(session)
+        patch = service.repositories.canon_patches.get_by_draft(draft_id)
+        if patch is None:
             raise typer.BadParameter(f"no pending canon patch for draft {draft_id}")
-        output(StoryBibleService(session).accept_patch(matches[0].id))
+        output(service.accept_patch(patch.id))
+
+
+@draft_app.command("list")
+def draft_list(
+    project_id: str,
+    draft_status: str | None = typer.Option(None, "--status"),
+    limit: int = typer.Option(100, "--limit", min=1, max=1000),
+) -> None:
+    with session_scope(runtime().session_factory) as session:
+        output(
+            runtime()
+            .generation_service(session)
+            .list_drafts(project_id, status=draft_status, limit=limit)
+        )
+
+
+@draft_app.command("show")
+def draft_show(draft_id: str) -> None:
+    with session_scope(runtime().session_factory) as session:
+        output(runtime().generation_service(session).get_draft(draft_id))
+
+
+@draft_app.command("download")
+def draft_download(draft_id: str, destination: Path) -> None:
+    with session_scope(runtime().session_factory) as session:
+        draft = runtime().generation_service(session).get_draft(draft_id)
+        destination.write_text(draft.body, encoding="utf-8")
+        output({"draft_id": draft_id, "destination": str(destination)})
+
+
+@draft_app.command("reject")
+def draft_reject(draft_id: str, reason: str = typer.Option(..., "--reason")) -> None:
+    with session_scope(runtime().session_factory) as session:
+        output(runtime().generation_service(session).reject_draft(draft_id, reason=reason))
+
+
+@draft_app.command("revise")
+def draft_revise(
+    draft_id: str,
+    instruction: str = typer.Option(..., "--instruction"),
+) -> None:
+    async def run() -> Any:
+        with session_scope(runtime().session_factory) as session:
+            draft, issues, risks, originality, patch_id = (
+                await runtime()
+                .generation_service(session)
+                .revise_draft(
+                    draft_id,
+                    instruction=instruction,
+                )
+            )
+            return {
+                "draft": draft,
+                "continuity_issues": issues,
+                "fact_risks": risks,
+                "originality": asdict(originality),
+                "canon_patch_id": patch_id,
+            }
+
+    output(asyncio.run(run()))
+
+
+@draft_app.command("diff")
+def draft_diff(from_draft_id: str, to_draft_id: str) -> None:
+    with session_scope(runtime().session_factory) as session:
+        typer.echo(runtime().generation_service(session).compare_drafts(from_draft_id, to_draft_id))
 
 
 @workflow_app.command("start")
@@ -252,6 +473,7 @@ def workflow_approve(
     decision: str = typer.Option("approve", "--decision"),
     actor: str = typer.Option("author", "--actor"),
     note: str = typer.Option("", "--note"),
+    option_id: str | None = typer.Option(None, "--option-id"),
 ) -> None:
     with session_scope(runtime().session_factory) as session:
         output(
@@ -264,6 +486,7 @@ def workflow_approve(
                 decision=decision,
                 actor=actor,
                 note=note,
+                selected_option_id=option_id,
             )
         )
 
@@ -377,10 +600,79 @@ def worker(
             )
         )
         return
-    try:
-        asyncio.run(workflow_worker.run_forever(poll_interval=poll_interval))
-    except KeyboardInterrupt:
-        typer.echo("Worker stopped.")
+
+    async def serve() -> None:
+        stop_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for signal_name in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(signal_name, stop_event.set)
+            except NotImplementedError:
+                pass
+        logging.getLogger("novel_harness.worker").info(
+            json.dumps(
+                {"event": "worker_started", "worker_id": workflow_worker.worker_id},
+                separators=(",", ":"),
+            )
+        )
+        await workflow_worker.run_forever(
+            poll_interval=poll_interval,
+            stop_event=stop_event,
+        )
+        logging.getLogger("novel_harness.worker").info(
+            json.dumps(
+                {"event": "worker_stopped", "worker_id": workflow_worker.worker_id},
+                separators=(",", ":"),
+            )
+        )
+
+    asyncio.run(serve())
+
+
+@ops_app.command("backup")
+def ops_backup(destination: Path) -> None:
+    output(OpsService(runtime().settings).create_backup(destination))
+
+
+@ops_app.command("verify")
+def ops_verify(archive: Path = typer.Argument(..., exists=True, dir_okay=False)) -> None:
+    output(OpsService(runtime().settings).verify_backup(archive))
+
+
+@ops_app.command("restore")
+def ops_restore(
+    archive: Path = typer.Argument(..., exists=True, dir_okay=False),
+    target_database: str | None = typer.Option(None, "--target-database"),
+    target_bucket: str | None = typer.Option(None, "--target-bucket"),
+    confirm: bool = typer.Option(False, "--confirm"),
+) -> None:
+    if not confirm:
+        raise typer.BadParameter("restore requires --confirm")
+    output(
+        OpsService(runtime().settings).restore_backup(
+            archive,
+            target_database=target_database,
+            target_bucket=target_bucket,
+        )
+    )
+
+
+@ops_app.command("drill")
+def ops_drill(
+    archive: Path = typer.Argument(..., exists=True, dir_okay=False),
+    target_database: str = typer.Option(..., "--target-database"),
+    target_bucket: str = typer.Option(..., "--target-bucket"),
+    confirm: bool = typer.Option(False, "--confirm"),
+) -> None:
+    if not confirm:
+        raise typer.BadParameter("restore drill requires --confirm")
+    output(
+        OpsService(runtime().settings).drill(
+            archive,
+            target_database=target_database,
+            target_bucket=target_bucket,
+        )
+    )
 
 
 @infra_app.command("check")

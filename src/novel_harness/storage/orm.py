@@ -160,6 +160,16 @@ class GenerationResultORM(ProjectOwnedMixin, Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
     object_key: Mapped[str | None] = mapped_column(String(1024))
     bible_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    plot_plan_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("plot_plans.id", ondelete="SET NULL")
+    )
+    selected_option_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("plot_options.id", ondelete="SET NULL")
+    )
+    parent_draft_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("generation_results.id", ondelete="SET NULL")
+    )
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
     __table_args__ = (Index("ix_generation_project_status", "project_id", "status"),)
 
@@ -243,10 +253,18 @@ class AgentRunORM(ProjectOwnedMixin, Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duration_ms: Mapped[int | None] = mapped_column(Integer)
+    model: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    estimated_cost: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    workflow_run_id: Mapped[str | None] = mapped_column(String(36))
+    trace_id: Mapped[str] = mapped_column(String(36), nullable=False, default="")
 
     __table_args__ = (
         Index("ix_agent_run_project_agent", "project_id", "agent_name"),
         Index("ix_agent_run_project_status", "project_id", "status"),
+        Index("ix_agent_run_trace", "trace_id"),
     )
 
 

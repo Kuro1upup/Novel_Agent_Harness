@@ -22,6 +22,7 @@ class RevisionAgent:
         fact_risks: Sequence[FactRisk],
         *,
         project_id: str | None = None,
+        author_feedback: str = "",
     ) -> GenerationResult:
         if isinstance(draft, GenerationResult):
             project_id = project_id or draft.project_id
@@ -62,6 +63,8 @@ class RevisionAgent:
             f"另有 {len(continuity_issues) - len(applied)} 项连续性建议需作者判断，"
             f"{sum(r.risk_level in {'high', 'unknown'} for r in fact_risks)} 项事实需核验。"
         )
+        if author_feedback.strip():
+            note = f"{note}\n作者修订要求：{author_feedback.strip()}"
         return make_model(
             GenerationResult,
             {
@@ -87,6 +90,7 @@ class RevisionAgent:
                     args[1] if len(args) > 1 else kwargs.get("continuity_issues")
                 ),
                 "fact_risks": args[2] if len(args) > 2 else kwargs.get("fact_risks"),
+                "author_feedback": kwargs.get("author_feedback", ""),
                 "rule_based_revision": baseline,
             },
         )

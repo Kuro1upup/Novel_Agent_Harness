@@ -4,20 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
-
+from novel_harness.models.creative import WorldbuildingProposal
 from novel_harness.models.story_bible import StoryBible
 
 from ._base import call_provider, format_prompt, load_prompt
-
-
-class WorldbuildingProposal(BaseModel):
-    world_summary: str
-    rules: list[dict[str, Any] | str] = Field(default_factory=list)
-    factions: list[dict[str, Any]] = Field(default_factory=list)
-    locations: list[dict[str, Any]] = Field(default_factory=list)
-    canon_conflicts: list[str] = Field(default_factory=list)
-    research_gaps: list[str] = Field(default_factory=list)
 
 
 class WorldbuildingAgent:

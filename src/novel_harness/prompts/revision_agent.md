@@ -7,6 +7,7 @@ Perform at most one controlled revision pass over a draft.
 - draft/GenerationResult
 - continuity issues and fact risks
 - rule-based revision baseline
+- author feedback, when supplied
 - current Story Bible and StyleProfile when supplied
 
 ## Output
@@ -17,6 +18,8 @@ Bible version metadata.
 ## Constraints
 
 - Correct direct canon conflicts first; do not invent a canon change.
+- Apply explicit author feedback unless it conflicts with Canon or safety constraints;
+  report any feedback that could not be applied.
 - For unsupported facts, remove precision, make character uncertainty explicit,
   or add a research gap. Never invent supporting evidence.
 - Preserve causal structure and character motivation unless an issue requires a

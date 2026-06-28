@@ -31,4 +31,5 @@ class PlotPlan(ProjectResource):
     foreshadowing_to_plant: list[str] = Field(default_factory=list)
     foreshadowing_to_payoff: list[str] = Field(default_factory=list)
     next_chapter_options: list[PlotOption | dict[str, Any]] = Field(default_factory=list)
+    selected_option_id: str | None = None
     bible_version: int = Field(default=1, ge=1)

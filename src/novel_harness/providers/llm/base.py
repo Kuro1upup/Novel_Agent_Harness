@@ -11,6 +11,7 @@ from typing import Any, Generic, Literal, TypeVar, overload
 from pydantic import BaseModel, ValidationError
 
 from novel_harness.exceptions import ProviderError
+from novel_harness.observability import observe_llm_response
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
 MessageRole = Literal["system", "user", "assistant", "tool"]
@@ -127,6 +128,7 @@ class LLMProvider(ABC, Generic[ResponseT]):
             max_tokens=max_tokens,
             extra=extra,
         )
+        observe_llm_response(response)
         if response_model is None:
             return response.content
         return self.parse_structured(response.content, response_model)

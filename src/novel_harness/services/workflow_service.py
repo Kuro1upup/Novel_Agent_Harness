@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from datetime import timedelta
 from typing import Any
 
@@ -17,6 +19,8 @@ from novel_harness.models import (
 )
 from novel_harness.providers.cache import CacheProvider, NullCacheProvider
 from novel_harness.storage.repositories import Repositories
+
+logger = logging.getLogger("novel_harness.workflow")
 
 TERMINAL_RUN_STATUSES = {"succeeded", "failed", "cancelled"}
 TERMINAL_STEP_STATUSES = {"succeeded", "skipped"}
@@ -333,6 +337,7 @@ class WorkflowService:
         decision: str,
         actor: str,
         note: str = "",
+        selected_option_id: str | None = None,
     ) -> WorkflowRunDetail:
         run = self.repositories.workflow_runs.require_for_update(run_id)
         step = self._require_step(run_id, step_name, for_update=True)
@@ -341,8 +346,24 @@ class WorkflowService:
         if decision not in {"approve", "reject"}:
             raise ValueError("decision must be approve or reject")
         now = utc_now()
-        approval_result = {"actor": actor, "note": note}
+        approval_result: dict[str, Any] = {"actor": actor, "note": note}
         if decision == "approve":
+            if step_name == "plot_approval" and selected_option_id:
+                plan_result = run.result.get("plan")
+                if not isinstance(plan_result, dict) or not plan_result.get("plan_id"):
+                    raise WorkflowStateError("workflow plot plan output is missing")
+                plan = self.repositories.plot_plans.require(str(plan_result["plan_id"]))
+                option = self.repositories.plot_options.require(selected_option_id)
+                if option.plot_plan_id != plan.id or option.project_id != run.project_id:
+                    raise ValueError("selected plot option does not belong to this workflow")
+                self.repositories.plot_plans.update(
+                    plan.model_copy(update={"selected_option_id": selected_option_id})
+                )
+                parameters = dict(run.parameters)
+                parameters["selected_option_id"] = selected_option_id
+                run = run.model_copy(update={"parameters": parameters, "updated_at": now})
+                self.repositories.workflow_runs.update(run)
+                approval_result["selected_option_id"] = selected_option_id
             step = step.model_copy(
                 update={
                     "status": "succeeded",
@@ -556,6 +577,18 @@ class WorkflowService:
             data=data or {},
         )
         stored = self.repositories.workflow_events.add(event)
+        logger.info(
+            json.dumps(
+                {
+                    "event": event_type,
+                    "project_id": run.project_id,
+                    "workflow_run_id": run.id,
+                    "step": step.name if step else None,
+                    "status": run.status,
+                },
+                separators=(",", ":"),
+            )
+        )
         self.cache.publish(
             f"novel:workflow:events:{run.project_id}",
             stored.model_dump(mode="json"),

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "novel-agent-harness"
-version = "0.1.0"
+version = "0.2.0"
 description = "A provider-neutral agent harness for long-form web novel writing."
 readme = "README.md"
 requires-python = ">=3.11"

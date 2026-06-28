@@ -7,9 +7,29 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+node_modules/
+logs/
 dist/
 build/
 *.egg-info/
+*.tsbuildinfo
 .idea/
 .vscode/
 
+# Go service build and runtime artifacts
+/auth/server
+/auth/server.exe
+/billing/server
+/billing/server.exe
+/auth/bin/
+/billing/bin/
+/auth/tmp/
+/billing/tmp/
+/auth/log/
+/billing/log/
+/auth/vendor/
+/billing/vendor/
+/auth/coverage.*
+/billing/coverage.*
+*.test
+*.out

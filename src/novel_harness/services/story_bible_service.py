@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from copy import deepcopy
 from typing import Any
 
@@ -11,8 +12,10 @@ from novel_harness.models import (
     CanonPatch,
     CharacterProfile,
     ForeshadowingItem,
+    ForeshadowingProposal,
     StoryBible,
     TimelineEvent,
+    WorldbuildingProposal,
 )
 from novel_harness.storage.repositories import (
     Repositories,
@@ -66,11 +69,15 @@ class StoryBibleService:
         *,
         planted_at: str | None = None,
         expected_payoff: str | None = None,
+        expected_version: int | None = None,
     ) -> StoryBible:
         bible = self.get(project_id)
+        self._check_version(bible, expected_version)
+        if not description.strip():
+            raise ValueError("foreshadowing description is required")
         item = ForeshadowingItem(
             project_id=project_id,
-            description=description,
+            description=description.strip(),
             planted_at=planted_at,
             expected_payoff=expected_payoff,
             status="planted" if planted_at else "planned",
@@ -88,8 +95,12 @@ class StoryBibleService:
         item_id: str,
         *,
         resolution: str,
+        expected_version: int | None = None,
     ) -> StoryBible:
         bible = self.get(project_id)
+        self._check_version(bible, expected_version)
+        if not resolution.strip():
+            raise ValueError("foreshadowing resolution is required")
         items: list[ForeshadowingItem | dict[str, Any]] = []
         matched = False
         for raw in bible.foreshadowing_items:
@@ -105,8 +116,124 @@ class StoryBibleService:
         updated = bible.model_copy(
             update={
                 "foreshadowing_items": items,
-                "resolved_threads": [*bible.resolved_threads, resolution],
+                "resolved_threads": [*bible.resolved_threads, resolution.strip()],
             }
+        )
+        return self.repositories.story_bibles.update_versioned(
+            updated, expected_version=bible.version
+        )
+
+    def add_rule(
+        self,
+        project_id: str,
+        value: dict[str, Any] | str,
+        *,
+        expected_version: int | None = None,
+    ) -> StoryBible:
+        return self._append_entry(
+            project_id,
+            field="rules",
+            value=value,
+            expected_version=expected_version,
+        )
+
+    def add_faction(
+        self,
+        project_id: str,
+        value: dict[str, Any],
+        *,
+        expected_version: int | None = None,
+    ) -> StoryBible:
+        if not isinstance(value, dict):
+            raise ValueError("faction must be an object")
+        return self._append_entry(
+            project_id,
+            field="factions",
+            value=value,
+            expected_version=expected_version,
+        )
+
+    def add_location(
+        self,
+        project_id: str,
+        value: dict[str, Any],
+        *,
+        expected_version: int | None = None,
+    ) -> StoryBible:
+        if not isinstance(value, dict):
+            raise ValueError("location must be an object")
+        return self._append_entry(
+            project_id,
+            field="locations",
+            value=value,
+            expected_version=expected_version,
+        )
+
+    def add_timeline_event(
+        self,
+        project_id: str,
+        event: TimelineEvent | dict[str, Any],
+        *,
+        expected_version: int | None = None,
+    ) -> StoryBible:
+        bible = self.get(project_id)
+        self._check_version(bible, expected_version)
+        model = (
+            event
+            if isinstance(event, TimelineEvent)
+            else TimelineEvent(project_id=project_id, **event)
+        )
+        if model.project_id != project_id:
+            raise ValueError("timeline event belongs to another project")
+        updated = bible.model_copy(update={"timeline": [*bible.timeline, model]})
+        return self.repositories.story_bibles.update_versioned(
+            updated, expected_version=bible.version
+        )
+
+    def apply_worldbuilding(
+        self,
+        project_id: str,
+        proposal: WorldbuildingProposal,
+        *,
+        expected_version: int | None = None,
+    ) -> StoryBible:
+        bible = self.get(project_id)
+        self._check_version(bible, expected_version)
+        updates = {
+            "world_summary": proposal.world_summary or bible.world_summary,
+            "rules": self._merge_entries(bible.rules, proposal.rules),
+            "factions": self._merge_entries(bible.factions, proposal.factions),
+            "locations": self._merge_entries(bible.locations, proposal.locations),
+        }
+        return self.repositories.story_bibles.update_versioned(
+            bible.model_copy(update=updates),
+            expected_version=bible.version,
+        )
+
+    def apply_foreshadowing(
+        self,
+        project_id: str,
+        proposal: ForeshadowingProposal,
+        *,
+        expected_version: int | None = None,
+    ) -> StoryBible:
+        bible = self.get(project_id)
+        self._check_version(bible, expected_version)
+        existing_descriptions = {item.description for item in bible.foreshadowing_items}
+        additions = [
+            ForeshadowingItem(
+                project_id=project_id,
+                description=action.description,
+                expected_payoff=action.target_payoff,
+                status="planned",
+            )
+            for action in proposal.actions
+            if action.action == "plant" and action.description not in existing_descriptions
+        ]
+        if not additions:
+            return bible
+        updated = bible.model_copy(
+            update={"foreshadowing_items": [*bible.foreshadowing_items, *additions]}
         )
         return self.repositories.story_bibles.update_versioned(
             updated, expected_version=bible.version
@@ -153,6 +280,58 @@ class StoryBibleService:
         if draft is not None:
             self.repositories.generations.update(draft.model_copy(update={"status": "accepted"}))
         return updated
+
+    def reject_patch(self, patch_id: str, *, reason: str = "") -> CanonPatch:
+        patch = self.repositories.canon_patches.require(patch_id)
+        if patch.status != "pending":
+            raise ValueError(f"patch is already {patch.status}")
+        metadata = [*patch.operations]
+        if reason:
+            metadata.append({"op": "rejection_note", "value": reason})
+        rejected = patch.model_copy(update={"status": "rejected", "operations": metadata})
+        return self.repositories.canon_patches.update(rejected)
+
+    def _append_entry(
+        self,
+        project_id: str,
+        *,
+        field: str,
+        value: dict[str, Any] | str,
+        expected_version: int | None,
+    ) -> StoryBible:
+        bible = self.get(project_id)
+        self._check_version(bible, expected_version)
+        if isinstance(value, str) and not value.strip():
+            raise ValueError(f"{field} entry must not be empty")
+        current = list(getattr(bible, field))
+        updated = bible.model_copy(update={field: [*current, deepcopy(value)]})
+        return self.repositories.story_bibles.update_versioned(
+            updated, expected_version=bible.version
+        )
+
+    @staticmethod
+    def _check_version(bible: StoryBible, expected_version: int | None) -> None:
+        if expected_version is not None and bible.version != expected_version:
+            raise VersionConflictError("Story Bible version changed")
+
+    @staticmethod
+    def _merge_entries(
+        current: Sequence[dict[str, Any] | str],
+        proposed: Sequence[dict[str, Any] | str],
+    ) -> list[dict[str, Any] | str]:
+        merged = list(deepcopy(current))
+        seen = {
+            (str(item.get("name")) if isinstance(item, dict) and item.get("name") else str(item))
+            for item in current
+        }
+        for item in proposed:
+            identity = (
+                str(item.get("name")) if isinstance(item, dict) and item.get("name") else str(item)
+            )
+            if identity not in seen:
+                merged.append(deepcopy(item))
+                seen.add(identity)
+        return merged
 
     @staticmethod
     def _apply_operation(bible: dict[str, Any], operation: dict[str, Any], project_id: str) -> None:

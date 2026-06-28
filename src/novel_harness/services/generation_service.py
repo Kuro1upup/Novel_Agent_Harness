@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 from collections.abc import Sequence
 from typing import Any
@@ -36,6 +37,7 @@ from novel_harness.providers.embedding import EmbeddingProvider
 from novel_harness.providers.vectorstore import VectorRecord, VectorStore
 from novel_harness.storage.repositories import Repositories
 
+from .agent_run_service import AgentRunService
 from .story_bible_service import StoryBibleService
 
 
@@ -57,6 +59,7 @@ class GenerationService:
         originality_max_ngram_overlap: float = 0.35,
         context_max_characters: int = 24_000,
         context_retrieval_limit: int = 12,
+        agent_runs: AgentRunService | None = None,
     ) -> None:
         self.session = session
         self.repositories = Repositories(session)
@@ -73,6 +76,7 @@ class GenerationService:
         self.max_ngram_overlap = originality_max_ngram_overlap
         self.context_max_characters = context_max_characters
         self.context_retrieval_limit = context_retrieval_limit
+        self.agent_runs = agent_runs
 
     async def analyze_style(
         self,
@@ -82,7 +86,20 @@ class GenerationService:
         source_document_ids: Sequence[str] = (),
     ) -> StyleProfile:
         self.repositories.projects.require(project_id)
-        profile = await self.style_analyzer.run(texts, project_id=project_id)
+
+        async def operation() -> StyleProfile:
+            return await self.style_analyzer.run(texts, project_id=project_id)
+
+        character_count = len(texts) if isinstance(texts, str) else sum(len(item) for item in texts)
+        profile = await self._run_agent(
+            project_id,
+            "style_analyzer",
+            operation,
+            input_summary=(
+                f"documents={len(texts) if not isinstance(texts, str) else 1};"
+                f"characters={character_count}"
+            ),
+        )
         previous = self.repositories.styles.list(project_id)
         profile = profile.model_copy(
             update={
@@ -100,6 +117,7 @@ class GenerationService:
         author_goal: str,
         *,
         retrieved_context: str | None = None,
+        workflow_run_id: str | None = None,
     ) -> PlotPlan:
         bible = StoryBibleService(self.session).get(project_id)
         styles = self.repositories.styles.list(project_id)
@@ -112,12 +130,21 @@ class GenerationService:
                 style=style,
                 current_summary=current_summary,
             )
-        plan = await self.plot_planner.run(
-            bible,
-            current_summary,
-            author_goal,
-            project_id=project_id,
-            retrieved_context=retrieved_context,
+        plan = await self._run_agent(
+            project_id,
+            "plot_planner",
+            lambda: self.plot_planner.run(
+                bible,
+                current_summary,
+                author_goal,
+                project_id=project_id,
+                retrieved_context=retrieved_context,
+            ),
+            input_summary=(
+                f"goal_chars={len(author_goal)};summary_chars={len(current_summary)};"
+                f"bible_version={bible.version}"
+            ),
+            workflow_run_id=workflow_run_id,
         )
         options = [
             option.model_copy(update={"plot_plan_id": plan.id})
@@ -140,6 +167,8 @@ class GenerationService:
         *,
         current_summary: str = "",
         plot_plan: PlotPlan | None = None,
+        selected_option_id: str | None = None,
+        workflow_run_id: str | None = None,
     ) -> tuple[
         GenerationResult,
         list[ContinuityIssue],
@@ -160,42 +189,87 @@ class GenerationService:
             current_summary=current_summary,
         )
         relevant_research = self._relevant_research(retrieval, research)
+        if plot_plan is not None and plot_plan.project_id != project_id:
+            raise ValueError("plot plan belongs to another project")
         plan = plot_plan or await self.plan(
             project_id,
             current_summary or "当前章节之后",
             scene_goal,
             retrieved_context=retrieved_context,
+            workflow_run_id=workflow_run_id,
         )
-        draft = await self.scene_writer.run(
-            style,
-            bible,
-            plan,
-            relevant_research,
-            scene_goal,
-            project_id=project_id,
-            retrieved_context=retrieved_context,
+        if selected_option_id:
+            plan = self.select_plot_option(project_id, plan.id, selected_option_id)
+        plan = self._selected_plan(plan)
+        draft = await self._run_agent(
+            project_id,
+            "scene_writer",
+            lambda: self.scene_writer.run(
+                style,
+                bible,
+                plan,
+                relevant_research,
+                scene_goal,
+                project_id=project_id,
+                retrieved_context=retrieved_context,
+            ),
+            input_summary=(
+                f"goal_chars={len(scene_goal)};plan_id={plan.id};"
+                f"selected_option_id={plan.selected_option_id or ''}"
+            ),
+            workflow_run_id=workflow_run_id,
         )
         draft = draft.model_copy(
             update={
+                "plot_plan_id": plan.id,
+                "selected_option_id": plan.selected_option_id,
                 "retrieval_query": retrieval.query,
                 "context_sources": self._context_references(project_id, retrieval),
             }
         )
-        continuity = await self.continuity_checker.run(draft.body, bible, project_id=project_id)
-        fact_risks = await self.fact_checker.run(
-            draft.body, relevant_research, project_id=project_id
+        continuity = await self._run_agent(
+            project_id,
+            "continuity_checker",
+            lambda: self.continuity_checker.run(draft.body, bible, project_id=project_id),
+            input_summary=f"draft_chars={len(draft.body)};bible_version={bible.version}",
+            workflow_run_id=workflow_run_id,
+        )
+        fact_risks = await self._run_agent(
+            project_id,
+            "fact_checker",
+            lambda: self.fact_checker.run(draft.body, relevant_research, project_id=project_id),
+            input_summary=(
+                f"draft_chars={len(draft.body)};research_notes={len(relevant_research)}"
+            ),
+            workflow_run_id=workflow_run_id,
         )
         if any(issue.severity == "error" for issue in continuity) or any(
             risk.risk_level in {"high", "unknown"} for risk in fact_risks
         ):
-            draft = await self.revision_agent.run(
-                draft, continuity, fact_risks, project_id=project_id
+            draft = await self._run_agent(
+                project_id,
+                "revision_agent",
+                lambda: self.revision_agent.run(
+                    draft, continuity, fact_risks, project_id=project_id
+                ),
+                input_summary=(
+                    f"draft_id={draft.id};continuity={len(continuity)};fact_risks={len(fact_risks)}"
+                ),
+                workflow_run_id=workflow_run_id,
             )
-            continuity = await self.continuity_checker.run(draft.body, bible, project_id=project_id)
+            continuity = await self._run_agent(
+                project_id,
+                "continuity_checker",
+                lambda: self.continuity_checker.run(draft.body, bible, project_id=project_id),
+                input_summary=f"revision=true;draft_chars={len(draft.body)}",
+                workflow_run_id=workflow_run_id,
+            )
         draft = draft.model_copy(
             update={
                 "retrieval_query": retrieval.query,
                 "context_sources": self._context_references(project_id, retrieval),
+                "plot_plan_id": plan.id,
+                "selected_option_id": plan.selected_option_id,
             }
         )
         sources = self._source_texts(project_id)
@@ -254,8 +328,18 @@ class GenerationService:
     ) -> tuple[list[ContinuityIssue], list[FactRisk]]:
         bible = StoryBibleService(self.session).get(project_id)
         notes = list(research_notes or self.repositories.research.list(project_id))
-        continuity = await self.continuity_checker.run(draft, bible, project_id=project_id)
-        fact_risks = await self.fact_checker.run(draft, notes, project_id=project_id)
+        continuity = await self._run_agent(
+            project_id,
+            "continuity_checker",
+            lambda: self.continuity_checker.run(draft, bible, project_id=project_id),
+            input_summary=f"standalone_check=true;draft_chars={len(draft)}",
+        )
+        fact_risks = await self._run_agent(
+            project_id,
+            "fact_checker",
+            lambda: self.fact_checker.run(draft, notes, project_id=project_id),
+            input_summary=f"standalone_check=true;research_notes={len(notes)}",
+        )
         return continuity, fact_risks
 
     def get_draft(self, draft_id: str) -> GenerationResult:
@@ -264,6 +348,228 @@ class GenerationService:
             body = self.object_store.get_bytes(draft.object_key).decode("utf-8")
             return draft.model_copy(update={"body": body})
         return draft
+
+    def list_drafts(
+        self,
+        project_id: str,
+        *,
+        status: str | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> list[GenerationResult]:
+        self.repositories.projects.require(project_id)
+        return self.repositories.generations.list_by_status(
+            project_id,
+            status=status,
+            offset=offset,
+            limit=limit,
+        )
+
+    def select_plot_option(
+        self,
+        project_id: str,
+        plot_plan_id: str,
+        option_id: str,
+    ) -> PlotPlan:
+        plan = self.repositories.plot_plans.require(plot_plan_id)
+        if plan.project_id != project_id:
+            raise ValueError("plot plan belongs to another project")
+        option = self.repositories.plot_options.require(option_id)
+        if option.project_id != project_id or option.plot_plan_id != plot_plan_id:
+            raise ValueError("plot option does not belong to this plan")
+        return self.repositories.plot_plans.update(
+            plan.model_copy(update={"selected_option_id": option_id})
+        )
+
+    def reject_draft(self, draft_id: str, *, reason: str) -> GenerationResult:
+        draft = self.repositories.generations.require(draft_id)
+        if draft.status == "accepted":
+            raise ValueError("accepted drafts cannot be rejected")
+        if draft.status == "rejected":
+            return draft
+        rejected = self.repositories.generations.update(
+            draft.model_copy(
+                update={
+                    "status": "rejected",
+                    "revision_instruction": reason.strip(),
+                }
+            )
+        )
+        patch = self.repositories.canon_patches.get_by_draft(draft_id)
+        if patch is not None and patch.status == "pending":
+            StoryBibleService(self.session).reject_patch(patch.id, reason=reason)
+        return rejected
+
+    async def revise_draft(
+        self,
+        draft_id: str,
+        *,
+        instruction: str,
+        workflow_run_id: str | None = None,
+    ) -> tuple[GenerationResult, list[ContinuityIssue], list[FactRisk], OriginalityReport, str]:
+        if not instruction.strip():
+            raise ValueError("revision instruction is required")
+        original = self.get_draft(draft_id)
+        if original.status == "accepted":
+            raise ValueError("accepted drafts are immutable")
+        bible = StoryBibleService(self.session).get(original.project_id)
+        issues = self.repositories.continuity_issues.list_for_draft(draft_id)
+        risks = self.repositories.fact_risks.list_for_draft(draft_id)
+        revised = await self._run_agent(
+            original.project_id,
+            "revision_agent",
+            lambda: self.revision_agent.run(
+                original,
+                issues,
+                risks,
+                project_id=original.project_id,
+                author_feedback=instruction,
+            ),
+            input_summary=(
+                f"parent_draft_id={draft_id};instruction_chars={len(instruction)};"
+                f"revision={original.revision_number + 1}"
+            ),
+            workflow_run_id=workflow_run_id,
+        )
+        revised = revised.model_copy(
+            update={
+                "status": "draft",
+                "object_key": None,
+                "plot_plan_id": original.plot_plan_id,
+                "selected_option_id": original.selected_option_id,
+                "parent_draft_id": original.id,
+                "revision_number": original.revision_number + 1,
+                "revision_instruction": instruction.strip(),
+                "retrieval_query": original.retrieval_query,
+                "context_sources": original.context_sources,
+                "bible_version": original.bible_version,
+            }
+        )
+        continuity = await self._run_agent(
+            original.project_id,
+            "continuity_checker",
+            lambda: self.continuity_checker.run(
+                revised.body, bible, project_id=original.project_id
+            ),
+            input_summary=f"author_revision=true;draft_chars={len(revised.body)}",
+            workflow_run_id=workflow_run_id,
+        )
+        research = self.repositories.research.list(original.project_id, limit=100)
+        fact_risks = await self._run_agent(
+            original.project_id,
+            "fact_checker",
+            lambda: self.fact_checker.run(revised.body, research, project_id=original.project_id),
+            input_summary=f"author_revision=true;research_notes={len(research)}",
+            workflow_run_id=workflow_run_id,
+        )
+        originality = check_originality(
+            revised.body[:50_000],
+            self._source_texts(original.project_id),
+            max_contiguous_chars=self.max_contiguous,
+            max_ngram_overlap=self.max_ngram_overlap,
+        )
+        if not originality.passed:
+            raise OriginalityError(
+                "revised draft overlaps an ingested source beyond the configured threshold"
+            )
+        digest = hashlib.sha256(revised.body.encode()).hexdigest()
+        object_key = f"projects/{original.project_id}/drafts/{revised.id}/{digest}.md"
+        self.object_store.put_bytes(
+            object_key,
+            revised.body.encode("utf-8"),
+            content_type="text/markdown; charset=utf-8",
+        )
+        stored = revised.model_copy(update={"object_key": object_key})
+        try:
+            self.repositories.generations.add(stored)
+            for issue in continuity:
+                self.repositories.continuity_issues.add(
+                    issue.model_copy(update={"draft_id": stored.id})
+                )
+            for risk in fact_risks:
+                self.repositories.fact_risks.add(risk.model_copy(update={"draft_id": stored.id}))
+            patch = StoryBibleService(self.session).create_patch(
+                original.project_id,
+                stored.id,
+                [
+                    {
+                        "op": "add_canon_event",
+                        "value": {
+                            "draft_id": stored.id,
+                            "summary": instruction.strip(),
+                            "status": "accepted_revision",
+                            "parent_draft_id": original.id,
+                        },
+                    }
+                ],
+            )
+            if original.status == "draft":
+                self.repositories.generations.update(
+                    original.model_copy(update={"status": "superseded"})
+                )
+            old_patch = self.repositories.canon_patches.get_by_draft(original.id)
+            if old_patch is not None and old_patch.status == "pending":
+                StoryBibleService(self.session).reject_patch(
+                    old_patch.id,
+                    reason=f"superseded by revision {stored.id}",
+                )
+        except Exception:
+            self.object_store.remove(object_key)
+            raise
+        return stored, continuity, fact_risks, originality, patch.id
+
+    def compare_drafts(self, from_draft_id: str, to_draft_id: str) -> str:
+        before = self.get_draft(from_draft_id)
+        after = self.get_draft(to_draft_id)
+        if before.project_id != after.project_id:
+            raise ValueError("drafts belong to different projects")
+        return "".join(
+            difflib.unified_diff(
+                before.body.splitlines(keepends=True),
+                after.body.splitlines(keepends=True),
+                fromfile=f"draft/{before.id}",
+                tofile=f"draft/{after.id}",
+            )
+        )
+
+    def _selected_plan(self, plan: PlotPlan) -> PlotPlan:
+        if not plan.selected_option_id:
+            return plan
+        option = self.repositories.plot_options.require(plan.selected_option_id)
+        if option.plot_plan_id != plan.id:
+            raise ValueError("selected plot option does not belong to this plan")
+        turning_points = list(plan.turning_points)
+        if option.summary and option.summary not in turning_points:
+            turning_points.append(option.summary)
+        return plan.model_copy(
+            update={
+                "conflict": option.conflict or plan.conflict,
+                "stakes": option.payoff or plan.stakes,
+                "turning_points": turning_points,
+                "foreshadowing_to_plant": list(
+                    dict.fromkeys([*plan.foreshadowing_to_plant, *option.foreshadowing])
+                ),
+            }
+        )
+
+    async def _run_agent(
+        self,
+        project_id: str,
+        agent_name: str,
+        operation: Any,
+        *,
+        input_summary: str,
+        workflow_run_id: str | None = None,
+    ) -> Any:
+        if self.agent_runs is None:
+            return await operation()
+        return await self.agent_runs.execute(
+            project_id,
+            agent_name,
+            operation,
+            input_summary=input_summary,
+            workflow_run_id=workflow_run_id,
+        )
 
     def _source_texts(self, project_id: str) -> list[str]:
         texts: list[str] = []

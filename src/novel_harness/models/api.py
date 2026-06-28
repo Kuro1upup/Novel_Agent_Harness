@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field
 
 from .base import DomainModel
+from .character import CharacterProfile
+from .creative import ForeshadowingProposal, WorldbuildingProposal
 from .generation import ContinuityIssue, FactRisk, GenerationResult
 from .memory import MemoryConflict, MemorySearchHit
+from .story_bible import StoryBible, TimelineEvent
 from .workflow import WorkflowEvent, WorkflowRun, WorkflowStep
 
 
@@ -35,6 +38,8 @@ class PlotRequest(DomainModel):
 class WriteRequest(DomainModel):
     goal: str = Field(min_length=1)
     current: str = ""
+    plot_plan_id: str | None = None
+    selected_option_id: str | None = None
 
 
 class CheckRequest(DomainModel):
@@ -72,6 +77,7 @@ class WorkflowApprovalRequest(DomainModel):
     decision: Literal["approve", "reject"]
     actor: str = Field(default="author", min_length=1, max_length=100)
     note: str = Field(default="", max_length=2000)
+    selected_option_id: str | None = None
 
 
 class WorkflowRetryRequest(DomainModel):
@@ -98,3 +104,83 @@ class MemoryQueryResponse(DomainModel):
 
 class MemoryInvalidateRequest(DomainModel):
     reason: str = Field(min_length=1, max_length=2000)
+
+
+class CharacterProposalRequest(DomainModel):
+    name: str = Field(min_length=1, max_length=255)
+    role: str = Field(default="", max_length=100)
+    brief: str = Field(default="", max_length=5000)
+    apply: bool = False
+
+
+class CharacterProposalResponse(DomainModel):
+    proposal: CharacterProfile
+    bible: StoryBible | None = None
+
+
+class WorldbuildingProposalRequest(DomainModel):
+    goal: str = Field(min_length=1, max_length=5000)
+    apply: bool = False
+
+
+class WorldbuildingProposalResponse(DomainModel):
+    proposal: WorldbuildingProposal
+    bible: StoryBible | None = None
+
+
+class ForeshadowingProposalRequest(DomainModel):
+    scene_goal: str = Field(min_length=1, max_length=5000)
+    max_actions: int = Field(default=3, ge=1, le=10)
+    apply: bool = False
+
+
+class ForeshadowingProposalResponse(DomainModel):
+    proposal: ForeshadowingProposal
+    bible: StoryBible | None = None
+
+
+class BibleEntryRequest(DomainModel):
+    value: dict[str, Any] | str
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class TimelineEventRequest(DomainModel):
+    sequence: int = Field(default=0, ge=0)
+    label: str = ""
+    time_reference: str = ""
+    summary: str = Field(min_length=1)
+    participants: list[str] = Field(default_factory=list)
+    expected_version: int | None = Field(default=None, ge=1)
+
+    def to_event(self, project_id: str) -> TimelineEvent:
+        return TimelineEvent(project_id=project_id, **self.model_dump(exclude={"expected_version"}))
+
+
+class ForeshadowingCreateRequest(DomainModel):
+    description: str = Field(min_length=1, max_length=5000)
+    planted_at: str | None = None
+    expected_payoff: str | None = None
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class ForeshadowingResolveRequest(DomainModel):
+    resolution: str = Field(min_length=1, max_length=5000)
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class PlotSelectionRequest(DomainModel):
+    option_id: str = Field(min_length=1)
+
+
+class DraftRevisionRequest(DomainModel):
+    instruction: str = Field(min_length=1, max_length=10_000)
+
+
+class DraftRejectRequest(DomainModel):
+    reason: str = Field(min_length=1, max_length=5000)
+
+
+class DraftDiffResponse(DomainModel):
+    from_draft_id: str
+    to_draft_id: str
+    unified_diff: str
