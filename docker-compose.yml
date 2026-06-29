@@ -148,6 +148,7 @@ services:
       BILLING_SERVICE_URL: http://billing:8002
       BILLING_INTERNAL_API_KEY: ${BILLING_INTERNAL_API_KEY:-novel-billing-internal-dev-key}
       PHONE_REGISTRATION_ENABLED: ${PHONE_REGISTRATION_ENABLED:-false}
+      LOCAL_ACCOUNT_BOOTSTRAP_ENABLED: ${LOCAL_ACCOUNT_BOOTSTRAP_ENABLED:-true}
       FRONTEND_URL: http://localhost:5173
       LOG_DIR: /app/log
     ports:

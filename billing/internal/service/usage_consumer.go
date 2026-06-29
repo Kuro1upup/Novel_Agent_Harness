@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
@@ -21,11 +22,24 @@ const (
 // UsageConsumer listens to Redis Streams for LLM usage events and records them.
 type UsageConsumer struct {
 	redisClient *redis.Client
-	billingSvc  *BillingService
+	billingSvc  usageRecorder
+}
+
+type usageRecorder interface {
+	RecordUsageEvent(
+		eventID string,
+		userID int64,
+		model string,
+		subsystem string,
+		inputTokens int,
+		cacheHitTokens int,
+		cacheMissTokens int,
+		outputTokens int,
+	) (int64, error)
 }
 
 // NewUsageConsumer creates a new UsageConsumer.
-func NewUsageConsumer(redisClient *redis.Client, billingSvc *BillingService) *UsageConsumer {
+func NewUsageConsumer(redisClient *redis.Client, billingSvc usageRecorder) *UsageConsumer {
 	return &UsageConsumer{
 		redisClient: redisClient,
 		billingSvc:  billingSvc,
@@ -59,12 +73,18 @@ func (c *UsageConsumer) consumeLoop(ctx context.Context) {
 }
 
 func (c *UsageConsumer) readAndProcess(ctx context.Context) {
+	// Retry messages already delivered to this stable local consumer before reading new ones.
+	c.readMessages(ctx, "0", -1)
+	c.readMessages(ctx, ">", redisReadTimeout)
+}
+
+func (c *UsageConsumer) readMessages(ctx context.Context, start string, block time.Duration) {
 	entries, err := c.redisClient.XReadGroup(ctx, &redis.XReadGroupArgs{
 		Group:    consumerGroup,
 		Consumer: consumerName,
-		Streams:  []string{streamKey, ">"},
+		Streams:  []string{streamKey, start},
 		Count:    10,
-		Block:    redisReadTimeout,
+		Block:    block,
 	}).Result()
 
 	if err != nil {
@@ -76,12 +96,28 @@ func (c *UsageConsumer) readAndProcess(ctx context.Context) {
 	}
 
 	for _, stream := range entries {
-		for _, msg := range stream.Messages {
-			if err := c.processMessage(ctx, msg); err != nil {
-				log.Printf("WARNING: Failed to process usage event: %v", err)
-			}
-			// Ack the message regardless of processing result (don't retry forever).
-			c.redisClient.XAck(ctx, streamKey, consumerGroup, msg.ID)
+		c.processMessages(ctx, stream.Messages, func(messageID string) error {
+			return c.redisClient.XAck(ctx, streamKey, consumerGroup, messageID).Err()
+		})
+	}
+}
+
+func (c *UsageConsumer) processMessages(
+	ctx context.Context,
+	messages []redis.XMessage,
+	acknowledge func(string) error,
+) {
+	for _, msg := range messages {
+		if err := c.processMessage(ctx, msg); err != nil {
+			log.Printf(
+				"WARNING: Failed to process usage event id=%s; left pending for retry: %v",
+				msg.ID,
+				err,
+			)
+			continue
+		}
+		if err := acknowledge(msg.ID); err != nil {
+			log.Printf("WARNING: Failed to ACK usage event id=%s: %v", msg.ID, err)
 		}
 	}
 }
@@ -93,59 +129,41 @@ func (c *UsageConsumer) processMessage(ctx context.Context, msg redis.XMessage) 
 	if ok {
 		// data is already the JSON string — use it directly.
 		if dataStr, ok := data.(string); ok {
-			return c.recordFromJSON([]byte(dataStr))
+			return c.recordFromJSON(msg.ID, []byte(dataStr))
 		}
-		// Fallback: marshal the value if it's not a plain string.
-		jsonBytes, err := json.Marshal(data)
-		if err != nil {
-			return nil
+		if dataBytes, ok := data.([]byte); ok {
+			return c.recordFromJSON(msg.ID, dataBytes)
 		}
-		return c.recordFromJSON(jsonBytes)
+		return fmt.Errorf("usage event data has unsupported type %T", data)
 	}
 
 	// No "data" key — try parsing the entire message body as JSON.
 	jsonBytes, err := json.Marshal(msg.Values)
 	if err != nil {
-		return nil
+		return fmt.Errorf("marshal usage event: %w", err)
 	}
-	return c.recordFromJSON(jsonBytes)
+	return c.recordFromJSON(msg.ID, jsonBytes)
 }
 
-func (c *UsageConsumer) recordFromJSON(data []byte) error {
+func (c *UsageConsumer) recordFromJSON(messageID string, data []byte) error {
 	var event domain.LLMUsageEvent
 	if err := json.Unmarshal(data, &event); err != nil {
-		// Try alternate format: flat JSON with all token fields at top level.
-		var flat struct {
-			UserID          int64  `json:"user_id"`
-			Model           string `json:"model"`
-			Subsystem       string `json:"subsystem"`
-			InputTokens     int    `json:"input_tokens"`
-			CacheHitTokens  int    `json:"cache_hit_tokens"`
-			CacheMissTokens int    `json:"cache_miss_tokens"`
-			OutputTokens    int    `json:"output_tokens"`
-			TotalTokens     int    `json:"total_tokens"`
-		}
-		if err := json.Unmarshal(data, &flat); err != nil {
-			log.Printf("WARNING: Failed to parse usage event JSON: %v (data=%s)", err, string(data))
-			return nil
-		}
-		event = domain.LLMUsageEvent{
-			UserID:          flat.UserID,
-			Model:           flat.Model,
-			Subsystem:       flat.Subsystem,
-			InputTokens:     flat.InputTokens,
-			CacheHitTokens:  flat.CacheHitTokens,
-			CacheMissTokens: flat.CacheMissTokens,
-			OutputTokens:    flat.OutputTokens,
-			TotalTokens:     flat.TotalTokens,
-		}
+		return fmt.Errorf("parse usage event JSON: %w", err)
 	}
 
-	if event.UserID == 0 {
-		return nil // Invalid event, skip.
+	if event.UserID <= 0 {
+		return fmt.Errorf("usage event has invalid user_id")
+	}
+	if event.Model == "" || event.Subsystem == "" {
+		return fmt.Errorf("usage event model and subsystem are required")
+	}
+	if event.InputTokens < 0 || event.CacheHitTokens < 0 || event.CacheMissTokens < 0 ||
+		event.OutputTokens < 0 {
+		return fmt.Errorf("usage event token counts must not be negative")
 	}
 
-	_, err := c.billingSvc.RecordUsage(
+	_, err := c.billingSvc.RecordUsageEvent(
+		streamKey+":"+messageID,
 		event.UserID, event.Model, event.Subsystem,
 		event.InputTokens, event.CacheHitTokens, event.CacheMissTokens, event.OutputTokens,
 	)

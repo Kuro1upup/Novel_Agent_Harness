@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
@@ -7,7 +8,7 @@ import pytest
 
 from novel_harness.api import create_app
 from novel_harness.exceptions import AuthenticationError, InsufficientBalanceError
-from novel_harness.integrations import AuthenticatedUser, BillingServiceClient
+from novel_harness.integrations import AuthenticatedUser, AuthServiceClient, BillingServiceClient
 from novel_harness.providers.llm import LLMResponse, MockLLMProvider
 from novel_harness.services import AgentRunService, ProjectService
 
@@ -38,6 +39,50 @@ class FakeBillingClient:
 
     async def record_usage(self, **payload: Any) -> None:
         self.usage.append(payload)
+
+
+@pytest.mark.asyncio
+async def test_auth_client_bootstraps_local_user_with_internal_key() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/auth/internal/bootstrap"
+        assert request.headers["X-Internal-Api-Key"] == "test-key"
+        payload = json.loads(request.content)
+        assert payload["email"] == "author@local.test"
+        assert payload["reset_password"] is False
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "created": True,
+                "user": {
+                    "id": 42,
+                    "email": "author@local.test",
+                    "nickname": "本地作者",
+                },
+            },
+        )
+
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="http://auth.test",
+    )
+    client = AuthServiceClient(
+        "http://auth.test",
+        internal_api_key="test-key",
+        timeout_seconds=1,
+        client=http_client,
+    )
+    try:
+        result = await client.bootstrap_local_user(
+            email="author@local.test",
+            password="local-password",
+            nickname="本地作者",
+        )
+        assert result.created is True
+        assert result.user.id == 42
+        assert result.user.email == "author@local.test"
+    finally:
+        await http_client.aclose()
 
 
 @pytest.mark.asyncio

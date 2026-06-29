@@ -33,8 +33,9 @@ Story Bible、剧情规划、章节生成、连续性检查和事实检查组织
 - 从章节直接启动生成工作流，自动维护当前草稿与已接受版本。
 - 支持正文手工修订、DOCX 导出、字数统计和工作流自动刷新。
 
-0.5.0 的章节中心写作台和验收标准见
-[`docs/roadmap-0.5.0.md`](docs/roadmap-0.5.0.md)。
+当前版本为 0.5.1：保留 0.5.0 章节中心写作台，并回补本地账号初始化、Go 服务统一
+检查和 Billing 消息可靠消费。范围与验收标准见
+[`docs/roadmap-0.5.1.md`](docs/roadmap-0.5.1.md)。
 
 ## 架构
 
@@ -68,9 +69,15 @@ cp .env.example .env
 
 ```bash
 make local-up
+make local-bootstrap
 novel-harness infra check
 novel-harness db init
 ```
+
+`make local-bootstrap` 会在容器内提示输入本地账号密码，默认创建
+`author@local.test`，并把 `owner_user_id=0` 的历史作品分配给该账号。已有账号的密码
+默认不会改变；需要重置时使用
+`novel-harness db bootstrap-local-user --reset-password`。
 
 停止整套本地服务：
 
@@ -109,6 +116,7 @@ AUTH_REQUIRED=true
 AUTH_SERVICE_URL=http://localhost:8001
 AUTH_DATABASE_NAME=novel_auth
 PHONE_REGISTRATION_ENABLED=false
+LOCAL_ACCOUNT_BOOTSTRAP_ENABLED=true
 
 BILLING_ENABLED=true
 BILLING_REQUIRED=true
@@ -195,6 +203,12 @@ novel-harness db migrate
 ```bash
 (cd billing && go run ./cmd/server)
 (cd auth && go run ./cmd/server)
+```
+
+两个服务启动后初始化本地账号：
+
+```bash
+novel-harness db bootstrap-local-user --email author@local.test
 ```
 
 启动 FastAPI 开发服务器：

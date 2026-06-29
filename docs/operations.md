@@ -18,12 +18,21 @@ novel-harness worker
 发布检查必须确认 Auth/Billing 的 `JWT_SECRET` 一致，且三个服务的
 `BILLING_INTERNAL_API_KEY` 一致。`/health/ready` 会把 Auth 和 Billing 纳入必需依赖。
 
-升级到 0.5.0 后执行 `novel-harness db migrate`，迁移会连接章节、当前草稿与已接受
-版本。归档是无损操作，不删除对象、向量或关联关系；归档项目上的新工作流和生成请求
-会被拒绝。
+升级到 0.5.1 后执行 `novel-harness db migrate` 并重启 Auth/Billing。Billing 启动时
+会为用量表增加幂等事件键；Python 迁移继续维护章节、当前草稿与已接受版本。归档是
+无损操作，不删除对象、向量或关联关系；归档项目上的新工作流和生成请求会被拒绝。
 
 本地整套服务可使用 `make local-up` 启动、`make local-down` 停止，使用
 `make local-status` 查看状态。
+
+首次本地运行执行 `make local-bootstrap`，交互输入至少 8 位密码。该命令通过内部
+密钥调用 Auth，只创建已验证邮箱账号，并把未归属历史作品分配给该用户。Auth 二进制
+默认关闭此能力；Docker Compose 的本地配置通过
+`LOCAL_ACCOUNT_BOOTSTRAP_ENABLED=true` 显式开启。已有密码只有传入
+`--reset-password` 时才会替换。
+
+`make check` 会通过两个 Go Dockerfile 的 `check` 阶段运行 `gofmt`、`go vet` 和
+`go test`，因此执行完整检查需要 Docker。
 
 ## 日志与告警
 
@@ -34,6 +43,7 @@ Prompt 或密钥。至少对以下事件建立告警：
 - `agent_failed`；
 - `step_failed`、`run_failed`；
 - Worker 在预期运行时间内没有 `worker_started` 或工作流事件。
+- Billing 日志中的 `left pending for retry`，表示用量消息写入失败并等待重试。
 
 成本告警以 `agent_succeeded.estimated_cost` 聚合；只有配置真实模型单价后该字段才有
 财务意义。

@@ -1,9 +1,16 @@
-FROM golang:1.22-alpine AS build
+FROM golang:1.22-alpine AS base
 
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+
+FROM base AS check
+RUN test -z "$(gofmt -l .)"
+RUN go vet ./...
+RUN go test ./...
+
+FROM base AS build
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/billing ./cmd/server
 
 FROM alpine:3.22

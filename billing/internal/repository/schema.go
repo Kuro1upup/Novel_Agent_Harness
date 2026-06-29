@@ -11,6 +11,7 @@ const (
 	ddlTokenUsageRecords = `
 	CREATE TABLE IF NOT EXISTS token_usage_records (
 		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+		event_id VARCHAR(128) NULL,
 		user_id BIGINT UNSIGNED NOT NULL,
 		model VARCHAR(128) NOT NULL,
 		subsystem VARCHAR(64) NOT NULL,
@@ -21,6 +22,7 @@ const (
 		total_tokens INT UNSIGNED NOT NULL DEFAULT 0,
 		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY (id),
+		UNIQUE KEY uq_usage_event_id (event_id),
 		KEY idx_usage_user_created (user_id, created_at),
 		KEY idx_usage_user_month (user_id, created_at, model)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
@@ -64,6 +66,36 @@ func EnsureSchema(db *sql.DB) error {
 		}
 	}
 
+	usageUpgradeStmts := []string{
+		"ALTER TABLE token_usage_records ADD COLUMN event_id VARCHAR(128) NULL AFTER id",
+		"CREATE UNIQUE INDEX uq_usage_event_id ON token_usage_records (event_id)",
+	}
+	for _, stmt := range usageUpgradeStmts {
+		if _, err := db.Exec(stmt); err != nil && !isDuplicateSchemaError(err) {
+			return fmt.Errorf("upgrade usage schema: %w", err)
+		}
+	}
+
 	log.Println("Billing tables ensured successfully")
 	return nil
+}
+
+func isDuplicateSchemaError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return contains(message, "Duplicate column name") ||
+		contains(message, "Duplicate key name") ||
+		contains(message, "Error 1060") ||
+		contains(message, "Error 1061")
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

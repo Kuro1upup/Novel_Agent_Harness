@@ -58,6 +58,19 @@ func AuthMiddleware(repo *repository.UserRepo, jwtSecret string) gin.HandlerFunc
 	}
 }
 
+// InternalAuthMiddleware protects local service-to-service administration endpoints.
+func InternalAuthMiddleware(apiKey string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		key := c.GetHeader("X-Internal-Api-Key")
+		if key == "" || key != apiKey {
+			c.JSON(http.StatusForbidden, gin.H{"detail": "内部接口认证失败"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
 // GetUserID extracts the authenticated user ID from the Gin context.
 func GetUserID(c *gin.Context) int64 {
 	id, _ := c.Get("user_id")

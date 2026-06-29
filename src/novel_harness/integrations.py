@@ -40,6 +40,12 @@ class AuthenticatedUser:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class LocalAccountBootstrapResult:
+    user: AuthenticatedUser
+    created: bool
+
+
 class ServiceClient:
     """Small shared async client with normalized upstream failure handling."""
 
@@ -94,6 +100,17 @@ class ServiceClient:
 
 
 class AuthServiceClient(ServiceClient):
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        timeout_seconds: float,
+        internal_api_key: str = "",
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        super().__init__(base_url, timeout_seconds=timeout_seconds, client=client)
+        self.internal_api_key = internal_api_key
+
     async def verify(self, token: str) -> AuthenticatedUser:
         if not token.strip():
             raise AuthenticationError("未提供认证信息")
@@ -114,6 +131,42 @@ class AuthServiceClient(ServiceClient):
         if not isinstance(payload, dict) or not isinstance(payload.get("user"), dict):
             raise AuthenticationError("认证服务返回了无效响应")
         return AuthenticatedUser.from_payload(payload["user"])
+
+    async def bootstrap_local_user(
+        self,
+        *,
+        email: str,
+        password: str,
+        nickname: str,
+        reset_password: bool = False,
+    ) -> LocalAccountBootstrapResult:
+        try:
+            response = await self.request(
+                "POST",
+                "/api/auth/internal/bootstrap",
+                headers={"X-Internal-Api-Key": self.internal_api_key},
+                json={
+                    "email": email,
+                    "password": password,
+                    "nickname": nickname,
+                    "reset_password": reset_password,
+                },
+            )
+        except ConnectionError as exc:
+            raise AuthenticationError("认证服务暂时不可用") from exc
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise AuthenticationError("认证服务返回了无效响应") from exc
+        if response.status_code != 200:
+            detail = payload.get("detail") if isinstance(payload, dict) else None
+            raise AuthenticationError(str(detail or "本地账号初始化失败"))
+        if not isinstance(payload, dict) or not isinstance(payload.get("user"), dict):
+            raise AuthenticationError("认证服务返回了无效响应")
+        return LocalAccountBootstrapResult(
+            user=AuthenticatedUser.from_payload(payload["user"]),
+            created=bool(payload.get("created")),
+        )
 
 
 class BillingServiceClient(ServiceClient):

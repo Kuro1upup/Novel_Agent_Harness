@@ -148,7 +148,7 @@ def create_app(
 
     app = FastAPI(
         title="Novel Agent Harness",
-        version="0.5.0",
+        version="0.5.1",
         description="Provider-neutral long-form fiction writing agent harness.",
         lifespan=lifespan,
     )

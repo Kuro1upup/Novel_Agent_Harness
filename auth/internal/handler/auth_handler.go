@@ -49,6 +49,13 @@ type LoginRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
+type BootstrapLocalUserRequest struct {
+	Email         string `json:"email" binding:"required"`
+	Password      string `json:"password" binding:"required,min=8"`
+	Nickname      string `json:"nickname"`
+	ResetPassword bool   `json:"reset_password"`
+}
+
 type SendLoginVerifyCodeRequest struct {
 	Method string `json:"method" binding:"required"`
 }
@@ -143,6 +150,34 @@ func (h *AuthHandler) Register(c *gin.Context) {
 func (h *AuthHandler) Capabilities(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"phone_registration_enabled": h.cfg.PhoneRegistrationEnabled,
+	})
+}
+
+// BootstrapLocalUser creates the explicitly configured local-only account.
+func (h *AuthHandler) BootstrapLocalUser(c *gin.Context) {
+	if !h.cfg.LocalBootstrapEnabled {
+		c.JSON(http.StatusForbidden, gin.H{"detail": "当前部署未启用本地账号初始化"})
+		return
+	}
+	var req BootstrapLocalUserRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "邮箱必填，密码至少 8 位"})
+		return
+	}
+	user, created, err := h.svc.BootstrapLocalUser(
+		req.Email,
+		req.Password,
+		req.Nickname,
+		req.ResetPassword,
+	)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"created": created,
+		"user":    h.svc.UserResponse(user),
 	})
 }
 

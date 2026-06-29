@@ -229,7 +229,7 @@ func (r *UserRepo) GetProfile(userID int64) (map[string]interface{}, error) {
 // UpdateProfile applies whitelisted profile field updates.
 func (r *UserRepo) UpdateProfile(userID int64, data map[string]interface{}) (map[string]interface{}, error) {
 	allowedFields := map[string]bool{
-	"nickname": true, "avatar_url": true, "age": true, "gender": true, "bio": true, "birthday": true,
+		"nickname": true, "avatar_url": true, "age": true, "gender": true, "bio": true, "birthday": true,
 	}
 
 	var setClauses []string
@@ -334,8 +334,8 @@ func (r *UserRepo) GetByIDFull(userID int64) (*domain.User, error) {
 	return &u, nil
 }
 
-// GetByEmail fetches basic user info by email.
-func (r *UserRepo) GetByEmail(email string) (*domain.User, error) {
+// FindByEmail fetches basic user info by email and returns nil when absent.
+func (r *UserRepo) FindByEmail(email string) (*domain.User, error) {
 	var u domain.User
 	var createdAt time.Time
 	var emailVerified, phoneVerified bool
@@ -345,7 +345,7 @@ func (r *UserRepo) GetByEmail(email string) (*domain.User, error) {
 		 FROM users WHERE email = ?`, email,
 	).Scan(&u.ID, &u.Email, &u.Phone, &u.Nickname, &emailVerified, &phoneVerified, &createdAt)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("用户不存在")
+		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get by email: %w", err)
@@ -354,6 +354,18 @@ func (r *UserRepo) GetByEmail(email string) (*domain.User, error) {
 	u.PhoneVerified = phoneVerified
 	u.CreatedAt = createdAt
 	return &u, nil
+}
+
+// GetByEmail fetches basic user info by email.
+func (r *UserRepo) GetByEmail(email string) (*domain.User, error) {
+	user, err := r.FindByEmail(email)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil {
+		return nil, fmt.Errorf("用户不存在")
+	}
+	return user, nil
 }
 
 // GetByPhone fetches basic user info by phone.

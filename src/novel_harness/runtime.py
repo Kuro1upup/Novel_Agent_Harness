@@ -122,6 +122,7 @@ class Runtime:
         return self._auth_client or AuthServiceClient(
             self.settings.auth_service_url,
             timeout_seconds=self.settings.auth_request_timeout_seconds,
+            internal_api_key=self.settings.billing_internal_api_key,
         )
 
     @cached_property

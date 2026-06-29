@@ -20,9 +20,24 @@ func NewBillingService(repo *repository.BillingRepo) *BillingService {
 // RecordUsage records a token usage event and updates the monthly bill.
 func (s *BillingService) RecordUsage(userID int64, model, subsystem string,
 	inputTokens, cacheHitTokens, cacheMissTokens, outputTokens int) (int64, error) {
+	return s.RecordUsageEvent(
+		"",
+		userID,
+		model,
+		subsystem,
+		inputTokens,
+		cacheHitTokens,
+		cacheMissTokens,
+		outputTokens,
+	)
+}
 
+// RecordUsageEvent records an idempotent stream event and updates its monthly bill atomically.
+func (s *BillingService) RecordUsageEvent(eventID string, userID int64, model, subsystem string,
+	inputTokens, cacheHitTokens, cacheMissTokens, outputTokens int) (int64, error) {
 	total := inputTokens + outputTokens
 	record := &domain.TokenUsageRecord{
+		EventID:         eventID,
 		UserID:          userID,
 		Model:           model,
 		Subsystem:       subsystem,

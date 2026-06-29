@@ -196,6 +196,12 @@ func main() {
 		internal.GET("/verify", authHandler.Verify)
 	}
 
+	localAdmin := r.Group("/api/auth/internal")
+	localAdmin.Use(middleware.InternalAuthMiddleware(cfg.InternalAPIKey))
+	{
+		localAdmin.POST("/bootstrap", authHandler.BootstrapLocalUser)
+	}
+
 	// Health.
 	r.GET("/api/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "healthy", "service": "auth"})

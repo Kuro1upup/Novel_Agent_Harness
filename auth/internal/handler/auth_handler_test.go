@@ -56,3 +56,26 @@ func TestCapabilitiesExposePhoneRegistrationSetting(t *testing.T) {
 		t.Fatalf("unexpected response: %s", response.Body.String())
 	}
 }
+
+func TestLocalBootstrapIsDisabledUnlessExplicitlyEnabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	authHandler := NewAuthHandler(nil, &config.Config{LocalBootstrapEnabled: false})
+	router := gin.New()
+	router.POST("/bootstrap", authHandler.BootstrapLocalUser)
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/bootstrap",
+		strings.NewReader(`{"email":"author@local.test","password":"local-password"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("returned %d, expected %d", response.Code, http.StatusForbidden)
+	}
+	if !strings.Contains(response.Body.String(), "未启用本地账号初始化") {
+		t.Fatalf("unexpected response: %s", response.Body.String())
+	}
+}

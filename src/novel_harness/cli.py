@@ -18,6 +18,7 @@ from sqlalchemy import update
 
 from novel_harness.config import get_settings
 from novel_harness.core.workflow import WorkflowWorker
+from novel_harness.exceptions import AuthenticationError
 from novel_harness.logging_config import configure_logging
 from novel_harness.models import CharacterProfile
 from novel_harness.runtime import Runtime
@@ -774,6 +775,65 @@ def db_assign_legacy_owner(
         )
         count = int(getattr(result, "rowcount", 0) or 0)
     output({"owner_user_id": user_id, "assigned_projects": count})
+
+
+@db_app.command("bootstrap-local-user")
+def db_bootstrap_local_user(
+    email: str = typer.Option("author@local.test", "--email", help="Local login email."),
+    nickname: str = typer.Option("本地作者", "--nickname", help="Nickname for a new account."),
+    password: str | None = typer.Option(
+        None,
+        "--password",
+        help="Password; omit to enter it without terminal echo.",
+        hide_input=True,
+    ),
+    reset_password: bool = typer.Option(
+        False,
+        "--reset-password",
+        help="Explicitly replace the password when the account already exists.",
+    ),
+    assign_legacy_projects: bool = typer.Option(
+        True,
+        "--assign-legacy-projects/--no-assign-legacy-projects",
+        help="Assign projects with owner_user_id=0 to this account.",
+    ),
+) -> None:
+    """Create the verified account used by a local single-user deployment."""
+
+    if password is None:
+        password = typer.prompt("本地账号密码", hide_input=True, confirmation_prompt=True)
+    if len(password) < 8:
+        raise typer.BadParameter("password must contain at least 8 characters")
+
+    async def bootstrap() -> Any:
+        return await runtime().auth_client.bootstrap_local_user(
+            email=email,
+            password=password,
+            nickname=nickname,
+            reset_password=reset_password,
+        )
+
+    try:
+        result = asyncio.run(bootstrap())
+    except AuthenticationError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    assigned = 0
+    if assign_legacy_projects:
+        with session_scope(runtime().session_factory) as session:
+            update_result = session.execute(
+                update(NovelProjectORM)
+                .where(NovelProjectORM.owner_user_id == 0)
+                .values(owner_user_id=result.user.id)
+            )
+            assigned = int(getattr(update_result, "rowcount", 0) or 0)
+    output(
+        {
+            "created": result.created,
+            "user": asdict(result.user),
+            "assigned_projects": assigned,
+        }
+    )
 
 
 @vector_app.command("rebuild")

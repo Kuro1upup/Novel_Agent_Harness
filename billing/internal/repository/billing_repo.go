@@ -2,10 +2,12 @@ package repository
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/shopspring/decimal"
 
 	"second-brain/billing/internal/domain"
@@ -25,23 +27,50 @@ func NewBillingRepo(db *sql.DB) *BillingRepo {
 
 // RecordUsage inserts a raw usage record and upserts the monthly bill.
 func (r *BillingRepo) RecordUsage(record *domain.TokenUsageRecord) (int64, error) {
-	id, err := r.insertUsage(record)
+	tx, err := r.db.Begin()
 	if err != nil {
+		return 0, fmt.Errorf("begin usage transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	id, err := insertUsage(tx, record)
+	if err != nil {
+		if record.EventID != "" && isDuplicateKeyError(err) {
+			_ = tx.Rollback()
+			var existingID int64
+			queryErr := r.db.QueryRow(
+				`SELECT id FROM token_usage_records WHERE event_id = ?`,
+				record.EventID,
+			).Scan(&existingID)
+			if queryErr != nil {
+				return 0, fmt.Errorf("find existing usage event: %w", queryErr)
+			}
+			return existingID, nil
+		}
 		return 0, err
 	}
-	if err := r.upsertBill(record); err != nil {
-		return id, err // Return the record ID even if bill upsert fails (non-fatal).
+	if err := upsertBill(tx, record); err != nil {
+		return 0, err
 	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit usage transaction: %w", err)
+	}
+	log.Printf("Token usage recorded: user=%d model=%s subsystem=%s total=%d id=%d",
+		record.UserID, record.Model, record.Subsystem, record.TotalTokens, id)
 	return id, nil
 }
 
-func (r *BillingRepo) insertUsage(record *domain.TokenUsageRecord) (int64, error) {
-	result, err := r.db.Exec(
+func insertUsage(tx *sql.Tx, record *domain.TokenUsageRecord) (int64, error) {
+	var eventID interface{}
+	if record.EventID != "" {
+		eventID = record.EventID
+	}
+	result, err := tx.Exec(
 		`INSERT INTO token_usage_records
-		 (user_id, model, subsystem, input_tokens, cache_hit_tokens,
+		 (event_id, user_id, model, subsystem, input_tokens, cache_hit_tokens,
 		  cache_miss_tokens, output_tokens, total_tokens)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		record.UserID, record.Model, record.Subsystem,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		eventID, record.UserID, record.Model, record.Subsystem,
 		record.InputTokens, record.CacheHitTokens, record.CacheMissTokens,
 		record.OutputTokens, record.TotalTokens,
 	)
@@ -49,16 +78,14 @@ func (r *BillingRepo) insertUsage(record *domain.TokenUsageRecord) (int64, error
 		return 0, fmt.Errorf("insert usage: %w", err)
 	}
 	id, _ := result.LastInsertId()
-	log.Printf("Token usage recorded: user=%d model=%s subsystem=%s total=%d id=%d",
-		record.UserID, record.Model, record.Subsystem, record.TotalTokens, id)
 	return id, nil
 }
 
-func (r *BillingRepo) upsertBill(record *domain.TokenUsageRecord) error {
+func upsertBill(tx *sql.Tx, record *domain.TokenUsageRecord) error {
 	billMonth := time.Now().UTC().Format("2006-01")
 	cost := domain.CalculateCost(record.Model, record.CacheHitTokens, record.CacheMissTokens, record.OutputTokens)
 
-	_, err := r.db.Exec(
+	_, err := tx.Exec(
 		`INSERT INTO bills
 		 (user_id, bill_month, model, total_input_tokens,
 		  total_cache_hit_tokens, total_cache_miss_tokens,
@@ -79,6 +106,11 @@ func (r *BillingRepo) upsertBill(record *domain.TokenUsageRecord) error {
 		return fmt.Errorf("upsert bill: %w", err)
 	}
 	return nil
+}
+
+func isDuplicateKeyError(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1062
 }
 
 // ── Recharges ──

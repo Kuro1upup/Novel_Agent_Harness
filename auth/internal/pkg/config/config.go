@@ -21,6 +21,7 @@ type Config struct {
 	BillingServiceURL        string
 	InternalAPIKey           string
 	PhoneRegistrationEnabled bool
+	LocalBootstrapEnabled    bool
 
 	// Tencent Cloud SMS (REST API with AppID/AppKey).
 	SMSAppID      string
@@ -57,6 +58,7 @@ func Load() *Config {
 			getEnv("INTERNAL_API_KEY", "internal-key-change-me"),
 		),
 		PhoneRegistrationEnabled: getEnvBool("PHONE_REGISTRATION_ENABLED", false),
+		LocalBootstrapEnabled:    getEnvBool("LOCAL_ACCOUNT_BOOTSTRAP_ENABLED", false),
 
 		// SMS (REST API with AppID/AppKey).
 		SMSAppID:      getEnv("SMS_APP_ID", ""),

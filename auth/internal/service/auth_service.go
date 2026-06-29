@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/mail"
+	"strings"
 	"time"
 
 	"second-brain/auth/internal/domain"
@@ -70,6 +72,64 @@ func (s *AuthService) Register(email, phone, password, code, method string) (*do
 	go s.initBalance(user.ID)
 
 	return user, nil
+}
+
+// BootstrapLocalUser creates a verified local email account without a delivery code.
+// Existing accounts are returned unchanged unless resetPassword is explicitly requested.
+func (s *AuthService) BootstrapLocalUser(
+	email, password, nickname string,
+	resetPassword bool,
+) (*domain.User, bool, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	nickname = strings.TrimSpace(nickname)
+	address, err := mail.ParseAddress(email)
+	if err != nil || address.Address != email {
+		return nil, false, fmt.Errorf("请输入有效邮箱地址")
+	}
+	if len(password) < 8 {
+		return nil, false, fmt.Errorf("本地账号密码至少需要 8 位")
+	}
+
+	user, err := s.repo.FindByEmail(email)
+	if err != nil {
+		return nil, false, err
+	}
+	if user != nil {
+		if resetPassword {
+			if err := s.repo.UpdatePassword(user.ID, password); err != nil {
+				return nil, false, err
+			}
+		}
+		if !user.EmailVerified {
+			if err := s.repo.MarkEmailVerified(user.ID); err != nil {
+				return nil, false, err
+			}
+			user.EmailVerified = true
+		}
+		return user, false, nil
+	}
+
+	user, err = s.repo.Register(email, "", password, "email")
+	if err != nil {
+		// A concurrent bootstrap may have created the same account.
+		user, findErr := s.repo.FindByEmail(email)
+		if findErr != nil {
+			return nil, false, findErr
+		}
+		if user == nil {
+			return nil, false, err
+		}
+		return user, false, nil
+	}
+	if nickname != "" {
+		profile, err := s.repo.UpdateProfile(user.ID, map[string]interface{}{"nickname": nickname})
+		if err != nil {
+			return nil, false, err
+		}
+		user.Nickname, _ = profile["nickname"].(string)
+	}
+	s.initBalance(user.ID)
+	return user, true, nil
 }
 
 // SendRegisterCode sends a verification code for new user registration.
@@ -442,6 +502,11 @@ func (s *AuthService) buildUserDict(user *domain.User) map[string]interface{} {
 		"phone_verified": user.PhoneVerified,
 		"created_at":     user.CreatedAt.Format(time.RFC3339),
 	}
+}
+
+// UserResponse returns the public user representation shared by HTTP handlers.
+func (s *AuthService) UserResponse(user *domain.User) map[string]interface{} {
+	return s.buildUserDict(user)
 }
 
 func (s *AuthService) initBalance(userID int64) {
