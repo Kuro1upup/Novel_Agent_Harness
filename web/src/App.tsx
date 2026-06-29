@@ -1,5 +1,7 @@
 import {
   Activity,
+  ArrowDown,
+  ArrowUp,
   Archive,
   BookOpen,
   Bot,
@@ -35,6 +37,8 @@ import type {
   BillingBills,
   BillingUsage,
   Draft,
+  ManuscriptChapter,
+  ManuscriptOutline,
   MemoryHit,
   PlotPlan,
   Project,
@@ -48,6 +52,7 @@ type Tab =
   | 'bible'
   | 'plot'
   | 'workflows'
+  | 'manuscript'
   | 'drafts'
   | 'memory'
   | 'settings'
@@ -58,6 +63,7 @@ const navItems: Array<{ id: Tab; label: string; icon: typeof BookOpen }> = [
   { id: 'bible', label: '故事圣经', icon: Library },
   { id: 'plot', label: '剧情规划', icon: Network },
   { id: 'workflows', label: '审批队列', icon: CircleDot },
+  { id: 'manuscript', label: '目录与导出', icon: BookOpen },
   { id: 'drafts', label: '章节草稿', icon: PenLine },
   { id: 'memory', label: '长期记忆', icon: Archive },
   { id: 'settings', label: '作品设置', icon: Settings2 },
@@ -75,6 +81,9 @@ const statusLabels: Record<string, string> = {
   accepted: '已接受',
   rejected: '已拒绝',
   superseded: '已迭代',
+  planned: '待创作',
+  drafting: '创作中',
+  completed: '已定稿',
 }
 
 function App() {
@@ -277,6 +286,9 @@ function Workspace({ user, onLogout }: { user: AuthUser; onLogout: () => void })
           {tab === 'workflows' && project && (
             <WorkflowWorkspace project={project} feedback={feedback} fail={fail} />
           )}
+          {tab === 'manuscript' && project && (
+            <ManuscriptWorkspace project={project} feedback={feedback} fail={fail} />
+          )}
           {tab === 'drafts' && project && (
             <DraftWorkspace project={project} feedback={feedback} fail={fail} />
           )}
@@ -321,12 +333,19 @@ function Workspace({ user, onLogout }: { user: AuthUser; onLogout: () => void })
 function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void }) {
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [method, setMethod] = useState<'email' | 'phone'>('email')
+  const [phoneRegistrationEnabled, setPhoneRegistrationEnabled] = useState(false)
   const [login, setLogin] = useState('')
   const [password, setPassword] = useState('')
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    api.authCapabilities()
+      .then((result) => setPhoneRegistrationEnabled(result.phone_registration_enabled))
+      .catch(() => setPhoneRegistrationEnabled(false))
+  }, [])
 
   const submit = async () => {
     if (!login.trim() || !password) return
@@ -377,7 +396,7 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => 
             注册
           </button>
         </div>
-        {mode === 'register' && (
+        {mode === 'register' && phoneRegistrationEnabled && (
           <div className="contact-tabs">
             <button className={method === 'email' ? 'active' : ''} onClick={() => setMethod('email')}>
               邮箱
@@ -1151,6 +1170,270 @@ function WorkflowWorkspace({
             </Panel>
           )}
         </div>
+      </section>
+    </div>
+  )
+}
+
+function ManuscriptWorkspace({
+  project,
+  feedback,
+  fail,
+}: {
+  project: Project
+  feedback: (message: string) => void
+  fail: (reason: unknown) => void
+}) {
+  const [outline, setOutline] = useState<ManuscriptOutline>({ volumes: [], chapters: [] })
+  const [drafts, setDrafts] = useState<Draft[]>([])
+  const [title, setTitle] = useState('')
+  const [volumeId, setVolumeId] = useState('')
+  const [draftId, setDraftId] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const refresh = useCallback(async () => {
+    try {
+      const [nextOutline, nextDrafts] = await Promise.all([
+        api.manuscript(project.id),
+        api.drafts(project.id),
+      ])
+      setOutline(nextOutline)
+      setDrafts(nextDrafts)
+      setVolumeId((current) => (
+        nextOutline.volumes.some((item) => item.id === current)
+          ? current
+          : nextOutline.volumes[0]?.id || ''
+      ))
+    } catch (reason) {
+      fail(reason)
+    }
+  }, [project.id, fail])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  const addVolume = async () => {
+    const nextTitle = window.prompt('新卷名称', `第 ${outline.volumes.length + 1} 卷`)
+    if (!nextTitle?.trim()) return
+    try {
+      await api.createVolume(project.id, { title: nextTitle.trim() })
+      await refresh()
+      feedback('新卷已创建')
+    } catch (reason) {
+      fail(reason)
+    }
+  }
+
+  const addChapter = async () => {
+    if (!title.trim() || !volumeId) return
+    setBusy(true)
+    try {
+      await api.createChapter(project.id, {
+        volume_id: volumeId,
+        title: title.trim(),
+        draft_id: draftId || undefined,
+      })
+      setTitle('')
+      setDraftId('')
+      await refresh()
+      feedback('章节已加入目录')
+    } catch (reason) {
+      fail(reason)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const reorder = async (
+    items: ManuscriptChapter[],
+    index: number,
+    direction: -1 | 1,
+  ) => {
+    const target = index + direction
+    if (target < 0 || target >= items.length) return
+    const ordered = items.map((item) => item.id)
+    ;[ordered[index], ordered[target]] = [ordered[target], ordered[index]]
+    try {
+      await api.reorderChapters(project.id, items[index].volume_id, ordered)
+      await refresh()
+    } catch (reason) {
+      fail(reason)
+    }
+  }
+
+  const reorderVolume = async (index: number, direction: -1 | 1) => {
+    const target = index + direction
+    if (target < 0 || target >= outline.volumes.length) return
+    const ordered = outline.volumes.map((item) => item.id)
+    ;[ordered[index], ordered[target]] = [ordered[target], ordered[index]]
+    try {
+      await api.reorderVolumes(project.id, ordered)
+      await refresh()
+    } catch (reason) {
+      fail(reason)
+    }
+  }
+
+  const download = async (format: 'markdown' | 'zip') => {
+    try {
+      const blob = await api.downloadManuscript(project.id, format)
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${project.name}.${format === 'zip' ? 'zip' : 'md'}`
+      link.click()
+      URL.revokeObjectURL(url)
+      feedback(`已导出 ${format === 'zip' ? 'ZIP 交付包' : 'Markdown 稿件'}`)
+    } catch (reason) {
+      fail(reason)
+    }
+  }
+
+  const linkedDraftIds = new Set(outline.chapters.map((item) => item.draft_id).filter(Boolean))
+  const exportable = outline.chapters.filter(
+    (item) => item.status === 'accepted' || item.status === 'completed',
+  ).length
+
+  return (
+    <div className="page-stack">
+      <section className="section-heading">
+        <div>
+          <span className="eyebrow">Manuscript</span>
+          <h2>卷章目录与交付稿</h2>
+          <p>组织章节顺序、关联已审阅草稿，并只导出进入 Canon 的正文。</p>
+        </div>
+        <div className="button-row">
+          <button className="secondary" disabled={!exportable} onClick={() => void download('markdown')}>
+            <Download size={16} />Markdown
+          </button>
+          <button className="primary" disabled={!exportable} onClick={() => void download('zip')}>
+            <Download size={16} />ZIP 交付包
+          </button>
+        </div>
+      </section>
+
+      <section className="metric-grid manuscript-metrics">
+        <Metric label="卷数" value={String(outline.volumes.length)} note="按目录顺序导出" />
+        <Metric label="章节数" value={String(outline.chapters.length)} note="包含待创作章节" />
+        <Metric label="可导出" value={String(exportable)} note="已接受或已定稿" />
+        <Metric label="未编排草稿" value={String(drafts.filter((item) => !linkedDraftIds.has(item.id)).length)} note="可关联到章节" />
+      </section>
+
+      <section className="manuscript-layout">
+        <div className="outline-list">
+          {outline.volumes.map((volume, volumeIndex) => {
+            const chapters = outline.chapters
+              .filter((item) => item.volume_id === volume.id)
+              .sort((left, right) => left.position - right.position)
+            return (
+              <article className="volume-card" key={volume.id}>
+                <header>
+                  <div>
+                    <span>卷 {volumeIndex + 1}</span>
+                    <h3>{volume.title}</h3>
+                  </div>
+                  <div className="order-buttons">
+                    <button disabled={volumeIndex === 0} title="上移卷" onClick={() => void reorderVolume(volumeIndex, -1)}><ArrowUp size={14} /></button>
+                    <button disabled={volumeIndex === outline.volumes.length - 1} title="下移卷" onClick={() => void reorderVolume(volumeIndex, 1)}><ArrowDown size={14} /></button>
+                    <button className="text-button" onClick={async () => {
+                      const nextTitle = window.prompt('修改卷名', volume.title)
+                      if (!nextTitle?.trim()) return
+                      try {
+                        await api.updateVolume(volume.id, { title: nextTitle.trim() })
+                        await refresh()
+                      } catch (reason) { fail(reason) }
+                    }}>重命名</button>
+                  </div>
+                </header>
+                <div className="chapter-list">
+                  {chapters.map((chapter, index) => (
+                    <div className="chapter-row" key={chapter.id}>
+                      <span className="chapter-number">{String(index + 1).padStart(2, '0')}</span>
+                      <div className="chapter-title">
+                        <strong>{chapter.title}</strong>
+                        <span className={`status ${chapter.status}`}>{statusLabels[chapter.status]}</span>
+                      </div>
+                      <select
+                        aria-label={`关联《${chapter.title}》的草稿`}
+                        value={chapter.draft_id || ''}
+                        onChange={async (event) => {
+                          try {
+                            await api.updateChapter(chapter.id, { draft_id: event.target.value || null })
+                            await refresh()
+                            feedback(event.target.value ? '章节已关联草稿' : '已解除草稿关联')
+                          } catch (reason) { fail(reason) }
+                        }}
+                      >
+                        <option value="">未关联草稿</option>
+                        {drafts
+                          .filter((item) => item.id === chapter.draft_id || !linkedDraftIds.has(item.id))
+                          .map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {statusLabels[item.status]} · 第 {item.revision_number} 版 · {item.creative_notes || item.id.slice(0, 8)}
+                            </option>
+                          ))}
+                      </select>
+                      <div className="order-buttons">
+                        {chapter.status === 'accepted' && (
+                          <button title="标记定稿" onClick={async () => {
+                            try {
+                              await api.updateChapter(chapter.id, { status: 'completed' })
+                              await refresh()
+                              feedback('章节已标记为定稿')
+                            } catch (reason) { fail(reason) }
+                          }}><Check size={14} /></button>
+                        )}
+                        <button disabled={index === 0} title="上移章节" onClick={() => void reorder(chapters, index, -1)}><ArrowUp size={14} /></button>
+                        <button disabled={index === chapters.length - 1} title="下移章节" onClick={() => void reorder(chapters, index, 1)}><ArrowDown size={14} /></button>
+                        <button title="修改章节名" onClick={async () => {
+                          const nextTitle = window.prompt('修改章节名', chapter.title)
+                          if (!nextTitle?.trim()) return
+                          try {
+                            await api.updateChapter(chapter.id, { title: nextTitle.trim() })
+                            await refresh()
+                          } catch (reason) { fail(reason) }
+                        }}><PenLine size={14} /></button>
+                      </div>
+                    </div>
+                  ))}
+                  {!chapters.length && <Empty text="这一卷还没有章节。" />}
+                </div>
+              </article>
+            )
+          })}
+        </div>
+
+        <aside className="composer-card sticky chapter-composer">
+          <span className="eyebrow">Add chapter</span>
+          <h3>编排新章节</h3>
+          <Field label="章节名" value={title} onChange={setTitle} placeholder="例如：第一章 长安雨夜" />
+          <label className="field">
+            <span>所属卷</span>
+            <select value={volumeId} onChange={(event) => setVolumeId(event.target.value)}>
+              {outline.volumes.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
+            </select>
+          </label>
+          <label className="field">
+            <span>关联草稿（可稍后设置）</span>
+            <select value={draftId} onChange={(event) => setDraftId(event.target.value)}>
+              <option value="">先创建目录占位</option>
+              {drafts
+                .filter((item) => !linkedDraftIds.has(item.id))
+                .map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {statusLabels[item.status]} · 第 {item.revision_number} 版
+                  </option>
+                ))}
+            </select>
+          </label>
+          <button className="primary wide" disabled={busy || !title.trim() || !volumeId} onClick={() => void addChapter()}>
+            <Plus size={16} />加入目录
+          </button>
+          <button className="secondary wide add-volume-button" onClick={() => void addVolume()}>
+            <Plus size={16} />新增卷
+          </button>
+        </aside>
       </section>
     </div>
   )

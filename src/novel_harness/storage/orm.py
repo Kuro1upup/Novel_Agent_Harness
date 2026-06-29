@@ -182,6 +182,47 @@ class GenerationResultORM(ProjectOwnedMixin, Base):
     __table_args__ = (Index("ix_generation_project_status", "project_id", "status"),)
 
 
+class ManuscriptVolumeORM(ProjectOwnedMixin, Base):
+    __tablename__ = "manuscript_volumes"
+
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+
+    __table_args__ = (
+        Index("ix_manuscript_volume_project_position", "project_id", "position"),
+        Index("ix_manuscript_volume_project_status", "project_id", "status"),
+    )
+
+
+class ManuscriptChapterORM(ProjectOwnedMixin, Base):
+    __tablename__ = "manuscript_chapters"
+
+    volume_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("manuscript_volumes.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="planned")
+    draft_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("generation_results.id", ondelete="SET NULL"),
+        unique=True,
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_manuscript_chapter_volume_position",
+            "project_id",
+            "volume_id",
+            "position",
+        ),
+        Index("ix_manuscript_chapter_project_status", "project_id", "status"),
+    )
+
+
 class ContinuityIssueORM(ProjectOwnedMixin, Base):
     __tablename__ = "continuity_issues"
 

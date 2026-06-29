@@ -21,6 +21,8 @@ from novel_harness.models import (
     DocumentChunk,
     FactRisk,
     GenerationResult,
+    ManuscriptChapter,
+    ManuscriptVolume,
     MemoryConflict,
     MemoryRecord,
     MemoryState,
@@ -47,6 +49,8 @@ from .orm import (
     DocumentORM,
     FactRiskORM,
     GenerationResultORM,
+    ManuscriptChapterORM,
+    ManuscriptVolumeORM,
     MemoryConflictORM,
     MemoryRecordORM,
     NovelProjectORM,
@@ -472,6 +476,96 @@ class GenerationRepository(JsonRepository[GenerationResult]):
             GenerationResult.model_validate(record.payload)
             for record in self.session.scalars(statement)
         ]
+
+
+class ManuscriptVolumeRepository(JsonRepository[ManuscriptVolume]):
+    domain_model = ManuscriptVolume
+    orm_model = ManuscriptVolumeORM
+
+    def _extra_values(self, model: ManuscriptVolume) -> dict[str, Any]:
+        return {
+            "title": model.title,
+            "position": model.position,
+            "status": model.status,
+        }
+
+    def list_ordered(
+        self,
+        project_id: str,
+        *,
+        include_archived: bool = False,
+    ) -> list[ManuscriptVolume]:
+        statement = select(ManuscriptVolumeORM).where(ManuscriptVolumeORM.project_id == project_id)
+        if not include_archived:
+            statement = statement.where(ManuscriptVolumeORM.status == "active")
+        statement = statement.order_by(
+            ManuscriptVolumeORM.position,
+            ManuscriptVolumeORM.created_at,
+        )
+        statement = self._scope_to_owner(statement)
+        return [
+            ManuscriptVolume.model_validate(record.payload)
+            for record in self.session.scalars(statement)
+        ]
+
+    def next_position(self, project_id: str) -> int:
+        value = self.session.scalar(
+            select(func.max(ManuscriptVolumeORM.position)).where(
+                ManuscriptVolumeORM.project_id == project_id
+            )
+        )
+        return int(value or 0) + 1
+
+
+class ManuscriptChapterRepository(JsonRepository[ManuscriptChapter]):
+    domain_model = ManuscriptChapter
+    orm_model = ManuscriptChapterORM
+
+    def _extra_values(self, model: ManuscriptChapter) -> dict[str, Any]:
+        return {
+            "volume_id": model.volume_id,
+            "title": model.title,
+            "position": model.position,
+            "status": model.status,
+            "draft_id": model.draft_id,
+        }
+
+    def list_ordered(
+        self,
+        project_id: str,
+        *,
+        volume_id: str | None = None,
+    ) -> list[ManuscriptChapter]:
+        statement = select(ManuscriptChapterORM).where(
+            ManuscriptChapterORM.project_id == project_id
+        )
+        if volume_id is not None:
+            statement = statement.where(ManuscriptChapterORM.volume_id == volume_id)
+        statement = statement.order_by(
+            ManuscriptChapterORM.volume_id,
+            ManuscriptChapterORM.position,
+            ManuscriptChapterORM.created_at,
+        )
+        statement = self._scope_to_owner(statement)
+        return [
+            ManuscriptChapter.model_validate(record.payload)
+            for record in self.session.scalars(statement)
+        ]
+
+    def next_position(self, project_id: str, volume_id: str) -> int:
+        value = self.session.scalar(
+            select(func.max(ManuscriptChapterORM.position)).where(
+                ManuscriptChapterORM.project_id == project_id,
+                ManuscriptChapterORM.volume_id == volume_id,
+            )
+        )
+        return int(value or 0) + 1
+
+    def get_by_draft(self, draft_id: str) -> ManuscriptChapter | None:
+        statement = select(ManuscriptChapterORM).where(ManuscriptChapterORM.draft_id == draft_id)
+        statement = self._scope_to_owner(statement)
+        record = self.session.scalar(statement)
+        return ManuscriptChapter.model_validate(record.payload) if record else None
 
 
 class ContinuityIssueRepository(JsonRepository[ContinuityIssue]):
@@ -903,6 +997,8 @@ class Repositories:
         self.plot_plans = PlotPlanRepository(session)
         self.plot_options = PlotOptionRepository(session)
         self.generations = GenerationRepository(session)
+        self.manuscript_volumes = ManuscriptVolumeRepository(session)
+        self.manuscript_chapters = ManuscriptChapterRepository(session)
         self.continuity_issues = ContinuityIssueRepository(session)
         self.fact_risks = FactRiskRepository(session)
         self.documents = DocumentRepository(session)

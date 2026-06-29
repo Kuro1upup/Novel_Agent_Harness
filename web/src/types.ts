@@ -85,6 +85,35 @@ export interface Project {
   updated_at: string
 }
 
+export interface ManuscriptVolume {
+  id: string
+  project_id: string
+  title: string
+  description: string
+  position: number
+  status: 'active' | 'archived'
+  created_at: string
+  updated_at: string
+}
+
+export interface ManuscriptChapter {
+  id: string
+  project_id: string
+  volume_id: string
+  title: string
+  summary: string
+  position: number
+  status: 'planned' | 'drafting' | 'accepted' | 'completed'
+  draft_id?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ManuscriptOutline {
+  volumes: ManuscriptVolume[]
+  chapters: ManuscriptChapter[]
+}
+
 export interface Character {
   id: string
   name: string

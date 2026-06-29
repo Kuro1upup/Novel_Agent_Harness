@@ -18,9 +18,11 @@ novel-harness worker
 发布检查必须确认 Auth/Billing 的 `JWT_SECRET` 一致，且三个服务的
 `BILLING_INTERNAL_API_KEY` 一致。`/health/ready` 会把 Auth 和 Billing 纳入必需依赖。
 
-升级到 0.3.0 后执行 `novel-harness db migrate`，迁移会为项目增加 `active/archived`
-生命周期字段。归档是无损操作，不删除对象、向量或关联关系；归档项目上的新工作流和
-生成请求会被拒绝。
+升级到 0.4.0 后执行 `novel-harness db migrate`，迁移会增加卷章目录。归档是无损
+操作，不删除对象、向量或关联关系；归档项目上的新工作流和生成请求会被拒绝。
+
+本地整套服务可使用 `make local-up` 启动、`make local-down` 停止，使用
+`make local-status` 查看状态。
 
 ## 日志与告警
 
@@ -43,10 +45,13 @@ API 停止时关闭已构造的 Provider 客户端和数据库 Engine。Worker �
 
 ## 备份策略
 
-每日运行 `novel-harness ops backup`，随后运行 `ops verify`。备份归档应复制到与
-MinIO 故障域不同、启用版本控制和生命周期策略的存储。数据库 dump 使用
+每日运行 `novel-harness ops backup`，随后运行 `ops verify`。备份包含
+`novel_agent`、`novel_auth`、`novel_billing` 三个数据库，应复制到与 MinIO 故障域
+不同、启用版本控制和生命周期策略的存储。数据库 dump 使用
 `--single-transaction`；运行主机需安装 MySQL 8 的 `mysqldump`/`mysql` 客户端，
-备份账户需要读取数据库和 bucket 的权限。
+备份账户需要读取三个数据库和 bucket 的权限。
+
+个人本地部署可以直接运行 `make local-backup`，归档默认写入 `backups/`。
 
 每月至少执行一次：
 

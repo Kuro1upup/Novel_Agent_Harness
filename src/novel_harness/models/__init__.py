@@ -2,6 +2,8 @@
 
 from .api import (
     BibleEntryRequest,
+    ChapterCreate,
+    ChapterUpdate,
     CharacterProposalRequest,
     CharacterProposalResponse,
     CheckRequest,
@@ -14,6 +16,8 @@ from .api import (
     ForeshadowingProposalRequest,
     ForeshadowingProposalResponse,
     ForeshadowingResolveRequest,
+    ManuscriptOutline,
+    ManuscriptReorderRequest,
     MemoryInvalidateRequest,
     MemoryQueryRequest,
     MemoryQueryResponse,
@@ -23,6 +27,8 @@ from .api import (
     ProjectUpdate,
     ResearchRequest,
     TimelineEventRequest,
+    VolumeCreate,
+    VolumeUpdate,
     WorkflowApprovalRequest,
     WorkflowCreateRequest,
     WorkflowRetryRequest,
@@ -43,6 +49,7 @@ from .generation import (
     FactRisk,
     GenerationResult,
 )
+from .manuscript import ManuscriptChapter, ManuscriptVolume
 from .memory import (
     MemoryCandidate,
     MemoryConflict,
@@ -67,6 +74,8 @@ __all__ = [
     "CharacterProfile",
     "CharacterProposalRequest",
     "CharacterProposalResponse",
+    "ChapterCreate",
+    "ChapterUpdate",
     "ContinuityIssue",
     "ContextReference",
     "Document",
@@ -95,6 +104,10 @@ __all__ = [
     "MemoryRecord",
     "MemorySearchHit",
     "MemoryState",
+    "ManuscriptChapter",
+    "ManuscriptOutline",
+    "ManuscriptReorderRequest",
+    "ManuscriptVolume",
     "NovelProject",
     "PlotOption",
     "PlotPlan",
@@ -110,6 +123,8 @@ __all__ = [
     "StyleProfile",
     "TimelineEvent",
     "TimelineEventRequest",
+    "VolumeCreate",
+    "VolumeUpdate",
     "WriteRequest",
     "WriteResponse",
     "WorkflowApprovalRequest",

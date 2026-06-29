@@ -98,6 +98,45 @@ def test_backup_archive_verification(tmp_path: Path) -> None:
     result = OpsService(Settings()).verify_backup(archive)
     assert result["valid"] is True
     assert result["files"] == 1
+    assert result["databases"] == 1
+
+
+def test_backup_contains_main_auth_and_billing_databases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        database_name="novel_agent",
+        auth_database_name="novel_auth",
+        billing_database_name="novel_billing",
+    )
+    service = OpsService(settings)
+    monkeypatch.setattr(service, "_require_command", lambda _: None)
+    monkeypatch.setattr(
+        service,
+        "_dump_database",
+        lambda destination, database: destination.write_text(
+            f"-- {database}\n",
+            encoding="utf-8",
+        ),
+    )
+    monkeypatch.setattr(service, "_download_objects", lambda _: [])
+
+    archive = tmp_path / "backup.tar.gz"
+    result = service.create_backup(archive)
+
+    assert result["databases"] == ["novel_agent", "novel_auth", "novel_billing"]
+    with tarfile.open(archive, "r:gz") as bundle:
+        manifest = json.loads(bundle.extractfile("manifest.json").read())
+        assert manifest["format_version"] == 2
+        assert [item["role"] for item in manifest["databases"]] == [
+            "main",
+            "auth",
+            "billing",
+        ]
+        assert bundle.getmember("databases/main.sql").isfile()
+        assert bundle.getmember("databases/auth.sql").isfile()
+        assert bundle.getmember("databases/billing.sql").isfile()
 
 
 def test_backup_rejects_path_traversal(tmp_path: Path) -> None:

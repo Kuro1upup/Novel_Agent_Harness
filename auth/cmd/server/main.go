@@ -149,6 +149,7 @@ func main() {
 	// Public routes (no auth required).
 	auth := r.Group("/api/auth")
 	{
+		auth.GET("/capabilities", authHandler.Capabilities)
 		auth.POST("/send-code", authHandler.SendRegisterCode)
 		auth.POST("/register", authHandler.Register)
 		auth.POST("/login", authHandler.Login)

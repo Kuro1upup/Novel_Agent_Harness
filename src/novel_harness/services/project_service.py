@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from novel_harness.exceptions import ProjectArchivedError
-from novel_harness.models import NovelProject, StoryBible, utc_now
+from novel_harness.models import ManuscriptVolume, NovelProject, StoryBible, utc_now
 from novel_harness.storage.repositories import Repositories
 
 
@@ -36,6 +36,9 @@ class ProjectService:
         )
         self.repositories.projects.add(project)
         self.repositories.story_bibles.add(StoryBible(project_id=project.id))
+        self.repositories.manuscript_volumes.add(
+            ManuscriptVolume(project_id=project.id, title="第一卷")
+        )
         return project
 
     def get(self, project_id: str, *, include_archived: bool = True) -> NovelProject:

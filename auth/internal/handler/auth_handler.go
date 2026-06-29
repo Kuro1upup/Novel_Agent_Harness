@@ -98,6 +98,10 @@ func (h *AuthHandler) SendRegisterCode(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "参数错误：method 为必填项（email 或 phone）"})
 		return
 	}
+	if req.Method == "phone" && !h.cfg.PhoneRegistrationEnabled {
+		c.JSON(http.StatusForbidden, gin.H{"detail": "当前部署已关闭手机号注册"})
+		return
+	}
 	if err := h.svc.SendRegisterCode(req.Email, req.Phone, req.Method); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 		return
@@ -111,6 +115,10 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "参数错误：密码至少6位，验证码6位，method为必填项"})
+		return
+	}
+	if req.Method == "phone" && !h.cfg.PhoneRegistrationEnabled {
+		c.JSON(http.StatusForbidden, gin.H{"detail": "当前部署已关闭手机号注册"})
 		return
 	}
 
@@ -129,6 +137,13 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		"phone_verified": user.PhoneVerified,
 		"created_at":     user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}})
+}
+
+// Capabilities exposes deployment-level authentication options to clients.
+func (h *AuthHandler) Capabilities(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"phone_registration_enabled": h.cfg.PhoneRegistrationEnabled,
+	})
 }
 
 // Login handles POST /api/auth/login. Accepts email OR phone as login identifier.

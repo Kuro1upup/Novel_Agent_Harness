@@ -4,6 +4,7 @@ from .agent_run_service import AgentRunService
 from .creative_service import CreativeService
 from .document_service import DocumentService
 from .generation_service import GenerationService
+from .manuscript_service import ManuscriptService
 from .memory_service import MemoryService
 from .ops_service import OpsService
 from .project_service import ProjectService
@@ -17,6 +18,7 @@ __all__ = [
     "DocumentService",
     "GenerationService",
     "MemoryService",
+    "ManuscriptService",
     "OpsService",
     "ProjectService",
     "ResearchService",

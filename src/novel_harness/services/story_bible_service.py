@@ -279,6 +279,11 @@ class StoryBibleService:
         draft = self.repositories.generations.get(patch.draft_id)
         if draft is not None:
             self.repositories.generations.update(draft.model_copy(update={"status": "accepted"}))
+            chapter = self.repositories.manuscript_chapters.get_by_draft(draft.id)
+            if chapter is not None and chapter.status == "drafting":
+                self.repositories.manuscript_chapters.update(
+                    chapter.model_copy(update={"status": "accepted"})
+                )
         return updated
 
     def reject_patch(self, patch_id: str, *, reason: str = "") -> CanonPatch:

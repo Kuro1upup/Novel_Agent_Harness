@@ -29,8 +29,10 @@ Story Bible、剧情规划、章节生成、连续性检查和事实检查组织
 - 提供 React Web 工作台以及 Agent 耗时、Token、成本和 Prompt 版本日志。
 - 按 Auth 用户隔离作品，支持作品新建、编辑、无损归档与恢复。
 - 提供账户级 Billing 中心，展示余额、Token 用量、月度账单和充值记录。
+- 按卷和章节组织已审阅内容，并导出 Markdown 或 ZIP 交付稿。
 
-0.3.0 的完整范围和验收标准见 [`docs/roadmap-0.3.0.md`](docs/roadmap-0.3.0.md)。
+0.4.0 的本地个人创作闭环和验收标准见
+[`docs/roadmap-0.4.0.md`](docs/roadmap-0.4.0.md)。
 
 ## 架构
 
@@ -63,9 +65,15 @@ cp .env.example .env
 本地开发可启动随项目提供的基础设施：
 
 ```bash
-docker compose up -d
+make local-up
 novel-harness infra check
 novel-harness db init
+```
+
+停止整套本地服务：
+
+```bash
+make local-down
 ```
 
 `docker-compose.yml` 使用以下端口：
@@ -98,6 +106,7 @@ DATABASE_PASSWORD=novel_agent_password
 AUTH_REQUIRED=true
 AUTH_SERVICE_URL=http://localhost:8001
 AUTH_DATABASE_NAME=novel_auth
+PHONE_REGISTRATION_ENABLED=false
 
 BILLING_ENABLED=true
 BILLING_REQUIRED=true
@@ -530,7 +539,7 @@ RUN_LIVE_TESTS=1 pytest -m live tests/test_live_providers.py
 
 备份需要同时覆盖：
 
-1. MySQL dump；
+1. MySQL 的 `novel_agent`、`novel_auth`、`novel_billing` 三个数据库 dump；
 2. MinIO `novel-agent` bucket；
 3. Milvus collection。
 
@@ -556,8 +565,9 @@ LLM_OUTPUT_COST_PER_MILLION=0
 
 ### 备份和恢复演练
 
-备份包含 MySQL 一致性 dump、MinIO bucket 对象、SHA-256 清单。Milvus 是可重建
-索引，不作为权威备份。执行主机需要安装 MySQL 8 客户端：
+备份包含主业务、Auth、Billing 三个 MySQL 数据库的一致性 dump、MinIO bucket 对象
+和 SHA-256 清单。Milvus 是可重建索引，不作为权威备份。执行主机需要安装 MySQL 8
+客户端：
 
 ```bash
 novel-harness ops backup backups/novel-$(date +%F).tar.gz

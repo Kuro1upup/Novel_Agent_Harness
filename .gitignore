@@ -9,6 +9,7 @@ __pycache__/
 htmlcov/
 node_modules/
 logs/
+/backups/
 dist/
 build/
 *.egg-info/

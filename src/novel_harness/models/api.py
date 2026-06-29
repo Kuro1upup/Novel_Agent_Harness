@@ -10,6 +10,7 @@ from .base import DomainModel
 from .character import CharacterProfile
 from .creative import ForeshadowingProposal, WorldbuildingProposal
 from .generation import ContinuityIssue, FactRisk, GenerationResult
+from .manuscript import ManuscriptChapter, ManuscriptVolume
 from .memory import MemoryConflict, MemorySearchHit
 from .story_bible import StoryBible, TimelineEvent
 from .workflow import WorkflowEvent, WorkflowRun, WorkflowStep
@@ -32,6 +33,46 @@ class ProjectUpdate(DomainModel):
     target_audience: str | None = None
     tone: str | None = None
     status: Literal["active", "archived"] | None = None
+
+
+class VolumeCreate(DomainModel):
+    title: str = Field(min_length=1, max_length=255)
+    description: str = Field(default="", max_length=5000)
+    position: int | None = Field(default=None, ge=1)
+
+
+class VolumeUpdate(DomainModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=5000)
+    position: int | None = Field(default=None, ge=1)
+    status: Literal["active", "archived"] | None = None
+
+
+class ChapterCreate(DomainModel):
+    volume_id: str
+    title: str = Field(min_length=1, max_length=255)
+    summary: str = Field(default="", max_length=5000)
+    position: int | None = Field(default=None, ge=1)
+    draft_id: str | None = None
+    status: Literal["planned", "drafting", "accepted", "completed"] | None = None
+
+
+class ChapterUpdate(DomainModel):
+    volume_id: str | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    summary: str | None = Field(default=None, max_length=5000)
+    position: int | None = Field(default=None, ge=1)
+    draft_id: str | None = None
+    status: Literal["planned", "drafting", "accepted", "completed"] | None = None
+
+
+class ManuscriptOutline(DomainModel):
+    volumes: list[ManuscriptVolume]
+    chapters: list[ManuscriptChapter]
+
+
+class ManuscriptReorderRequest(DomainModel):
+    ordered_ids: list[str] = Field(min_length=1)
 
 
 class ResearchRequest(DomainModel):

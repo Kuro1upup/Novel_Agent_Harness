@@ -5,6 +5,9 @@ import type {
   BillingBills,
   BillingUsage,
   Draft,
+  ManuscriptChapter,
+  ManuscriptOutline,
+  ManuscriptVolume,
   MemoryHit,
   PlotPlan,
   Project,
@@ -70,6 +73,8 @@ export const api = {
       body: JSON.stringify({ login, password }),
     }),
   me: () => request<{ success: boolean; user: AuthUser }>('/api/auth/me'),
+  authCapabilities: () =>
+    request<{ phone_registration_enabled: boolean }>('/api/auth/capabilities'),
   sendRegisterCode: (method: 'email' | 'phone', value: string) =>
     request<{ success: boolean; message: string }>('/api/auth/send-code', {
       method: 'POST',
@@ -107,6 +112,56 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
+  manuscript: (projectId: string) =>
+    request<ManuscriptOutline>(`/projects/${projectId}/manuscript`),
+  createVolume: (
+    projectId: string,
+    payload: { title: string; description?: string },
+  ) =>
+    request<ManuscriptVolume>(`/projects/${projectId}/volumes`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateVolume: (volumeId: string, payload: Partial<ManuscriptVolume>) =>
+    request<ManuscriptVolume>(`/volumes/${volumeId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  reorderVolumes: (projectId: string, orderedIds: string[]) =>
+    request<ManuscriptVolume[]>(`/projects/${projectId}/volumes/reorder`, {
+      method: 'POST',
+      body: JSON.stringify({ ordered_ids: orderedIds }),
+    }),
+  createChapter: (
+    projectId: string,
+    payload: {
+      volume_id: string
+      title: string
+      summary?: string
+      draft_id?: string
+    },
+  ) =>
+    request<ManuscriptChapter>(`/projects/${projectId}/chapters`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateChapter: (chapterId: string, payload: Partial<ManuscriptChapter>) =>
+    request<ManuscriptChapter>(`/chapters/${chapterId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  reorderChapters: (
+    projectId: string,
+    volumeId: string,
+    orderedIds: string[],
+  ) =>
+    request<ManuscriptChapter[]>(
+      `/projects/${projectId}/volumes/${volumeId}/chapters/reorder`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ ordered_ids: orderedIds }),
+      },
+    ),
   bible: (projectId: string) => request<StoryBible>(`/projects/${projectId}/bible`),
   addBibleEntry: (
     projectId: string,
@@ -244,6 +299,23 @@ export const api = {
         window.dispatchEvent(new Event('auth-expired'))
       }
       throw new ApiError(`下载失败（${response.status}）`, response.status)
+    }
+    return response.blob()
+  },
+  downloadManuscript: async (projectId: string, format: 'markdown' | 'zip') => {
+    const response = await fetch(`${API_URL}/projects/${projectId}/export?format=${format}`, {
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      if (response.status === 401) {
+        authSession.clear()
+        window.dispatchEvent(new Event('auth-expired'))
+      }
+      throw new ApiError(
+        payload?.message || payload?.detail || `导出失败（${response.status}）`,
+        response.status,
+      )
     }
     return response.blob()
   },

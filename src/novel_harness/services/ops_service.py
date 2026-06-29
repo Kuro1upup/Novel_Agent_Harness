@@ -34,17 +34,32 @@ class OpsService:
         self._require_command("mysqldump")
         with tempfile.TemporaryDirectory(prefix="novel-backup-") as temporary:
             root = Path(temporary)
-            dump_path = root / "database.sql"
-            self._dump_database(dump_path)
+            database_dir = root / "databases"
+            database_dir.mkdir()
+            database_entries: list[dict[str, str]] = []
+            files: list[dict[str, str]] = []
+            for role, database in self._databases().items():
+                self._validate_name(database, "database")
+                relative = f"databases/{role}.sql"
+                dump_path = root / relative
+                self._dump_database(dump_path, database)
+                digest = self._sha256(dump_path)
+                database_entries.append(
+                    {
+                        "role": role,
+                        "name": database,
+                        "path": relative,
+                        "sha256": digest,
+                    }
+                )
+                files.append({"path": relative, "sha256": digest})
             object_entries = self._download_objects(root / "objects")
-            files = [
-                {"path": "database.sql", "sha256": self._sha256(dump_path)},
-                *object_entries,
-            ]
+            files.extend(object_entries)
             manifest = {
-                "format_version": 1,
+                "format_version": 2,
                 "created_at": datetime.now(UTC).isoformat(),
                 "database": self.settings.database_name,
+                "databases": database_entries,
                 "bucket": self.settings.minio_bucket,
                 "files": files,
                 "milvus": "rebuild from relational metadata and object-store content",
@@ -55,11 +70,12 @@ class OpsService:
             )
             with tarfile.open(destination, "w:gz") as archive:
                 archive.add(root / "manifest.json", arcname="manifest.json")
-                archive.add(dump_path, arcname="database.sql")
+                archive.add(database_dir, arcname="databases")
                 if (root / "objects").exists():
                     archive.add(root / "objects", arcname="objects")
         result = {
             "archive": str(destination),
+            "databases": [item["name"] for item in database_entries],
             "objects": len(object_entries),
             "sha256": self._sha256(destination),
         }
@@ -70,13 +86,15 @@ class OpsService:
         with self._extract_verified(archive_path) as extracted:
             manifest = json.loads((extracted / "manifest.json").read_text(encoding="utf-8"))
             for item in manifest.get("files", []):
-                path = extracted / str(item["path"])
+                path = self._manifest_path(extracted, str(item["path"]))
                 if not path.is_file() or self._sha256(path) != item["sha256"]:
                     raise ValueError(f"backup checksum failed for {item['path']!r}")
+            database_entries = self._database_entries(manifest, extracted)
             result = {
                 "archive": str(archive_path.expanduser().resolve()),
                 "valid": True,
                 "files": len(manifest.get("files", [])),
+                "databases": len(database_entries),
                 "created_at": manifest.get("created_at"),
             }
         self._log("backup_verified", **result)
@@ -96,12 +114,27 @@ class OpsService:
         self._require_command("mysql")
         with self._extract_verified(archive_path) as extracted:
             self.verify_backup(archive_path)
-            self._ensure_database(database)
-            self._restore_database(extracted / "database.sql", database)
+            manifest = json.loads((extracted / "manifest.json").read_text(encoding="utf-8"))
+            entries = self._database_entries(manifest, extracted)
+            if target_database:
+                main = next(
+                    (item for item in entries if item["role"] == "main"),
+                    entries[0],
+                )
+                restore_targets = [(database, Path(main["path"]))]
+            else:
+                restore_targets = [(str(item["name"]), Path(item["path"])) for item in entries]
+            restored_databases: list[str] = []
+            for target, dump in restore_targets:
+                self._validate_name(target, "database")
+                self._ensure_database(target)
+                self._restore_database(dump, target)
+                restored_databases.append(target)
             count = self._upload_objects(extracted, bucket)
         result = {
             "archive": str(archive_path.expanduser().resolve()),
             "database": database,
+            "databases": restored_databases,
             "bucket": bucket,
             "objects": count,
             "vector_rebuild_required": True,
@@ -129,7 +162,7 @@ class OpsService:
         self._log("restore_drill_completed", **result)
         return result
 
-    def _dump_database(self, destination: Path) -> None:
+    def _dump_database(self, destination: Path, database: str) -> None:
         with destination.open("wb") as output:
             self._run(
                 [
@@ -144,7 +177,7 @@ class OpsService:
                     "--routines",
                     "--triggers",
                     "--set-gtid-purged=OFF",
-                    self.settings.database_name,
+                    database,
                 ],
                 stdout=output,
             )
@@ -253,9 +286,57 @@ class OpsService:
                     if member.issym() or member.islnk():
                         raise ValueError("backup must not contain links")
                 archive.extractall(root, filter="data")
-            if not (root / "manifest.json").is_file() or not (root / "database.sql").is_file():
-                raise ValueError("backup is missing manifest.json or database.sql")
+            if not (root / "manifest.json").is_file():
+                raise ValueError("backup is missing manifest.json")
             yield root
+
+    def _database_entries(
+        self,
+        manifest: dict[str, Any],
+        extracted: Path,
+    ) -> list[dict[str, Any]]:
+        raw_entries = manifest.get("databases")
+        entries: list[dict[str, Any]]
+        if isinstance(raw_entries, list) and raw_entries:
+            entries = [item for item in raw_entries if isinstance(item, dict)]
+        else:
+            entries = [
+                {
+                    "role": "main",
+                    "name": manifest.get("database") or self.settings.database_name,
+                    "path": "database.sql",
+                }
+            ]
+        normalized: list[dict[str, Any]] = []
+        for item in entries:
+            path = self._manifest_path(extracted, str(item.get("path") or ""))
+            if not path.is_file():
+                raise ValueError("backup is missing a database dump")
+            normalized.append(
+                {
+                    "role": str(item.get("role") or "main"),
+                    "name": str(item.get("name") or self.settings.database_name),
+                    "path": path,
+                }
+            )
+        if not normalized:
+            raise ValueError("backup does not contain a database dump")
+        return normalized
+
+    def _databases(self) -> dict[str, str]:
+        return {
+            "main": self.settings.database_name,
+            "auth": self.settings.auth_database_name,
+            "billing": self.settings.billing_database_name,
+        }
+
+    @staticmethod
+    def _manifest_path(extracted: Path, value: str) -> Path:
+        root = extracted.resolve()
+        path = (root / value).resolve()
+        if root not in path.parents:
+            raise ValueError("backup manifest contains an unsafe path")
+        return path
 
     @staticmethod
     def _sha256(path: Path) -> str:

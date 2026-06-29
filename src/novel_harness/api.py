@@ -7,7 +7,7 @@ import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, File, Form, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,6 +32,8 @@ from novel_harness.logging_config import configure_logging
 from novel_harness.models import (
     AgentRun,
     BibleEntryRequest,
+    ChapterCreate,
+    ChapterUpdate,
     CharacterProposalRequest,
     CharacterProposalResponse,
     CheckRequest,
@@ -45,6 +47,10 @@ from novel_harness.models import (
     ForeshadowingProposalResponse,
     ForeshadowingResolveRequest,
     GenerationResult,
+    ManuscriptChapter,
+    ManuscriptOutline,
+    ManuscriptReorderRequest,
+    ManuscriptVolume,
     MemoryInvalidateRequest,
     MemoryQueryRequest,
     MemoryQueryResponse,
@@ -61,6 +67,8 @@ from novel_harness.models import (
     StoryBible,
     StyleProfile,
     TimelineEventRequest,
+    VolumeCreate,
+    VolumeUpdate,
     WorkflowApprovalRequest,
     WorkflowCreateRequest,
     WorkflowRetryRequest,
@@ -74,7 +82,12 @@ from novel_harness.models import (
 from novel_harness.providers import ObjectStoreError, VectorStoreError
 from novel_harness.runtime import Runtime
 from novel_harness.security import bind_user, reset_user
-from novel_harness.services import ProjectService, StoryBibleService, WorkflowService
+from novel_harness.services import (
+    ManuscriptService,
+    ProjectService,
+    StoryBibleService,
+    WorkflowService,
+)
 from novel_harness.storage import (
     ResourceNotFoundError,
     VersionConflictError,
@@ -133,7 +146,7 @@ def create_app(
 
     app = FastAPI(
         title="Novel Agent Harness",
-        version="0.3.0",
+        version="0.4.0",
         description="Provider-neutral long-form fiction writing agent harness.",
         lifespan=lifespan,
     )
@@ -278,6 +291,124 @@ def create_app(
         return ProjectService(session).update(
             project_id,
             **payload.model_dump(exclude_unset=True),
+        )
+
+    @app.get(
+        "/projects/{project_id}/manuscript",
+        response_model=ManuscriptOutline,
+    )
+    async def get_manuscript(
+        project_id: str,
+        session: SessionDep,
+        include_archived: bool = False,
+    ) -> ManuscriptOutline:
+        return ManuscriptService(session).outline(
+            project_id,
+            include_archived=include_archived,
+        )
+
+    @app.post(
+        "/projects/{project_id}/volumes",
+        response_model=ManuscriptVolume,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_volume(
+        project_id: str,
+        payload: VolumeCreate,
+        session: SessionDep,
+    ) -> ManuscriptVolume:
+        return ManuscriptService(session).create_volume(
+            project_id,
+            **payload.model_dump(),
+        )
+
+    @app.patch("/volumes/{volume_id}", response_model=ManuscriptVolume)
+    async def update_volume(
+        volume_id: str,
+        payload: VolumeUpdate,
+        session: SessionDep,
+    ) -> ManuscriptVolume:
+        return ManuscriptService(session).update_volume(
+            volume_id,
+            **payload.model_dump(exclude_unset=True),
+        )
+
+    @app.post(
+        "/projects/{project_id}/volumes/reorder",
+        response_model=list[ManuscriptVolume],
+    )
+    async def reorder_volumes(
+        project_id: str,
+        payload: ManuscriptReorderRequest,
+        session: SessionDep,
+    ) -> list[ManuscriptVolume]:
+        return ManuscriptService(session).reorder_volumes(
+            project_id,
+            payload.ordered_ids,
+        )
+
+    @app.post(
+        "/projects/{project_id}/chapters",
+        response_model=ManuscriptChapter,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_chapter(
+        project_id: str,
+        payload: ChapterCreate,
+        session: SessionDep,
+    ) -> ManuscriptChapter:
+        return ManuscriptService(session).create_chapter(
+            project_id,
+            **payload.model_dump(),
+        )
+
+    @app.patch("/chapters/{chapter_id}", response_model=ManuscriptChapter)
+    async def update_chapter(
+        chapter_id: str,
+        payload: ChapterUpdate,
+        session: SessionDep,
+    ) -> ManuscriptChapter:
+        return ManuscriptService(session).update_chapter(
+            chapter_id,
+            **payload.model_dump(exclude_unset=True),
+        )
+
+    @app.post(
+        "/projects/{project_id}/volumes/{volume_id}/chapters/reorder",
+        response_model=list[ManuscriptChapter],
+    )
+    async def reorder_chapters(
+        project_id: str,
+        volume_id: str,
+        payload: ManuscriptReorderRequest,
+        session: SessionDep,
+    ) -> list[ManuscriptChapter]:
+        return ManuscriptService(session).reorder_chapters(
+            project_id,
+            volume_id,
+            payload.ordered_ids,
+        )
+
+    @app.get("/projects/{project_id}/export")
+    async def export_manuscript(
+        project_id: str,
+        rt: RuntimeDep,
+        session: SessionDep,
+        format: Literal["markdown", "zip"] = "markdown",
+    ) -> Response:
+        service = ManuscriptService(session)
+        if format == "zip":
+            zip_content, _ = service.export_zip(project_id, rt.object_store)
+            return Response(
+                content=zip_content,
+                media_type="application/zip",
+                headers={"Content-Disposition": 'attachment; filename="manuscript.zip"'},
+            )
+        markdown_content, _ = service.export_markdown(project_id, rt.object_store)
+        return Response(
+            content=markdown_content,
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="manuscript.md"'},
         )
 
     @app.post("/projects/{project_id}/style/analyze", response_model=StyleProfile)
