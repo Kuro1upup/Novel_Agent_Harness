@@ -11,6 +11,8 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from novel_harness.exceptions import BillingUnavailableError
+from novel_harness.integrations import BillingServiceClient
 from novel_harness.models import AgentRun, utc_now
 from novel_harness.observability import capture_llm_usage, prompt_version
 from novel_harness.storage import session_scope
@@ -28,12 +30,14 @@ class AgentRunService:
         provider: Any | None,
         input_cost_per_million: float = 0.0,
         output_cost_per_million: float = 0.0,
+        billing_client: BillingServiceClient | None = None,
         persistence_factory: sessionmaker[Session] | None = None,
     ) -> None:
         self.repositories = Repositories(session)
         self.provider = provider
         self.input_cost_per_million = max(input_cost_per_million, 0.0)
         self.output_cost_per_million = max(output_cost_per_million, 0.0)
+        self.billing_client = billing_client
         self.persistence_factory = persistence_factory
 
     async def execute(
@@ -45,6 +49,9 @@ class AgentRunService:
         input_summary: str = "",
         workflow_run_id: str | None = None,
     ) -> ResultT:
+        project = self.repositories.projects.require(project_id)
+        if self.billing_client is not None and project.owner_user_id > 0:
+            await self.billing_client.ensure_available_balance(project.owner_user_id)
         provider_name = (
             type(self.provider).__name__ if self.provider is not None else "deterministic"
         )
@@ -100,6 +107,33 @@ class AgentRunService:
         )
         self._update(succeeded)
         self._log("agent_succeeded", succeeded)
+        if (
+            self.billing_client is not None
+            and project.owner_user_id > 0
+            and (usage.prompt_tokens > 0 or usage.completion_tokens > 0)
+        ):
+            try:
+                await self.billing_client.record_usage(
+                    user_id=project.owner_user_id,
+                    model=succeeded.model,
+                    subsystem="novel_harness",
+                    input_tokens=usage.prompt_tokens,
+                    output_tokens=usage.completion_tokens,
+                )
+            except BillingUnavailableError as exc:
+                logger.error(
+                    json.dumps(
+                        {
+                            "event": "billing_usage_report_failed",
+                            "trace_id": run.trace_id,
+                            "project_id": project_id,
+                            "user_id": project.owner_user_id,
+                            "error": str(exc),
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                )
         return result
 
     def list(self, project_id: str, *, limit: int = 100) -> list[AgentRun]:

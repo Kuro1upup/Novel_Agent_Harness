@@ -2,10 +2,10 @@ services:
   mysql:
     image: mysql:8.4
     environment:
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_DATABASE: novel_agent
-      MYSQL_USER: novel_agent
-      MYSQL_PASSWORD: novel_agent_password
+      MYSQL_ROOT_PASSWORD: ${DATABASE_ROOT_PASSWORD:-root_password}
+      MYSQL_DATABASE: ${DATABASE_NAME:-novel_agent}
+      MYSQL_USER: ${DATABASE_USER:-novel_agent}
+      MYSQL_PASSWORD: ${DATABASE_PASSWORD:-novel_agent_password}
       TZ: UTC
     command:
       - --character-set-server=utf8mb4
@@ -86,9 +86,154 @@ services:
       timeout: 5s
       retries: 20
 
+  db-init:
+    build:
+      context: .
+      target: runtime
+    env_file:
+      - .env
+    environment:
+      DATABASE_HOST: mysql
+      DATABASE_PORT: 3306
+    command: ["novel-harness", "db", "init"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+
+  billing:
+    build:
+      context: ./billing
+    env_file:
+      - billing/.env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${BILLING_DATABASE_NAME:-novel_billing}
+      MYSQL_USER: ${DATABASE_USER:-novel_agent}
+      MYSQL_PASSWORD: ${DATABASE_PASSWORD:-novel_agent_password}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-myredissecret}
+      BILLING_INTERNAL_API_KEY: ${BILLING_INTERNAL_API_KEY:-novel-billing-internal-dev-key}
+      LOG_DIR: /app/log
+    ports:
+      - "8002:8002"
+    volumes:
+      - billing-logs:/app/log
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8002/api/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  auth:
+    build:
+      context: ./auth
+    env_file:
+      - auth/.env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${AUTH_DATABASE_NAME:-novel_auth}
+      MYSQL_USER: ${DATABASE_USER:-novel_agent}
+      MYSQL_PASSWORD: ${DATABASE_PASSWORD:-novel_agent_password}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_BUCKET: novel-auth
+      BILLING_SERVICE_URL: http://billing:8002
+      BILLING_INTERNAL_API_KEY: ${BILLING_INTERNAL_API_KEY:-novel-billing-internal-dev-key}
+      FRONTEND_URL: http://localhost:5173
+      LOG_DIR: /app/log
+    ports:
+      - "8001:8001"
+    volumes:
+      - auth-logs:/app/log
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      billing:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8001/api/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      target: api
+    env_file:
+      - .env
+    environment:
+      DATABASE_HOST: mysql
+      DATABASE_PORT: 3306
+      MINIO_ENDPOINT: minio:9000
+      MILVUS_HOST: milvus
+      MILVUS_PORT: 19530
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      AUTH_SERVICE_URL: http://auth:8001
+      BILLING_SERVICE_URL: http://billing:8002
+    ports:
+      - "8000:8000"
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      auth:
+        condition: service_healthy
+      billing:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      milvus:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      target: worker
+    env_file:
+      - .env
+    environment:
+      DATABASE_HOST: mysql
+      DATABASE_PORT: 3306
+      MINIO_ENDPOINT: minio:9000
+      MILVUS_HOST: milvus
+      MILVUS_PORT: 19530
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      AUTH_SERVICE_URL: http://auth:8001
+      BILLING_SERVICE_URL: http://billing:8002
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./web
+      args:
+        VITE_API_URL: http://localhost:8000
+    ports:
+      - "5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   mysql-data:
   etcd-data:
   minio-data:
   milvus-data:
   redis-data:
+  auth-logs:
+  billing-logs:

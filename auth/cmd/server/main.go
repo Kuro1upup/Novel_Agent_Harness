@@ -124,12 +124,12 @@ func main() {
 			SecretKey: cfg.TencentSecretKey,
 			Region:    cfg.SESRegion,
 		})
-		// if err != nil {
-		// 	log.Printf("WARNING: Email client init failed: %v", err)
-		// } else {
-		// 	log.Println("Email client initialized")
-		// }
-		log.Println("Skip to initialize email client")
+		if err != nil {
+			log.Printf("WARNING: Email client init failed: %v", err)
+			emailClient = nil
+		} else {
+			log.Println("Email client initialized")
+		}
 	} else {
 		log.Println("WARNING: Email not configured (missing TENCENT_SECRET_ID or TENCENT_SECRET_KEY)")
 	}

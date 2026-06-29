@@ -164,6 +164,8 @@ def runtime(
     settings = Settings(
         llm_provider="mock",
         search_provider="mock",
+        auth_required=False,
+        billing_enabled=False,
         originality_max_contiguous_chars=100,
     )
     return Runtime(

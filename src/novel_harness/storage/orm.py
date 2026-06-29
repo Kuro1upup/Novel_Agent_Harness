@@ -54,6 +54,12 @@ class NovelProjectORM(TimestampMixin, Base):
     __tablename__ = "novel_projects"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        index=True,
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     genre: Mapped[str] = mapped_column(String(100), nullable=False)
     sub_genre: Mapped[str | None] = mapped_column(String(100))
@@ -258,7 +264,10 @@ class AgentRunORM(ProjectOwnedMixin, Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     estimated_cost: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    workflow_run_id: Mapped[str | None] = mapped_column(String(36))
+    workflow_run_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("workflow_runs.id", ondelete="SET NULL"),
+    )
     trace_id: Mapped[str] = mapped_column(String(36), nullable=False, default="")
 
     __table_args__ = (

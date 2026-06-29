@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from typing import Annotated
@@ -17,12 +17,16 @@ from sqlalchemy.orm import Session
 
 from novel_harness.config import Settings
 from novel_harness.exceptions import (
+    AuthenticationError,
+    BillingUnavailableError,
     ConfigurationError,
     DocumentError,
+    InsufficientBalanceError,
     NovelHarnessError,
     OriginalityError,
     WorkflowStateError,
 )
+from novel_harness.integrations import AuthenticatedUser, ServiceClient
 from novel_harness.logging_config import configure_logging
 from novel_harness.models import (
     AgentRun,
@@ -67,6 +71,7 @@ from novel_harness.models import (
 )
 from novel_harness.providers import ObjectStoreError, VectorStoreError
 from novel_harness.runtime import Runtime
+from novel_harness.security import bind_user, reset_user
 from novel_harness.services import ProjectService, StoryBibleService, WorkflowService
 from novel_harness.storage import (
     ResourceNotFoundError,
@@ -76,6 +81,15 @@ from novel_harness.storage import (
 )
 
 logger = logging.getLogger("novel_harness.api")
+
+_PUBLIC_PATHS = {
+    "/health",
+    "/health/ready",
+    "/docs",
+    "/docs/oauth2-redirect",
+    "/openapi.json",
+    "/redoc",
+}
 
 
 async def get_runtime(request: Request) -> Runtime:
@@ -113,11 +127,11 @@ def create_app(
             yield
         finally:
             logger.info(json.dumps({"event": "api_stopping"}, separators=(",", ":")))
-            runtime.close()
+            await runtime.aclose()
 
     app = FastAPI(
         title="Novel Agent Harness",
-        version="0.2.0",
+        version="0.3.0",
         description="Provider-neutral long-form fiction writing agent harness.",
         lifespan=lifespan,
     )
@@ -130,6 +144,37 @@ def create_app(
     )
     app.state.runtime = runtime
     _register_error_handlers(app)
+
+    @app.middleware("http")
+    async def authenticate_request(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        path = request.url.path
+        is_public = (
+            request.method == "OPTIONS" or path in _PUBLIC_PATHS or path.startswith("/api/auth/")
+        )
+        if is_public:
+            return await call_next(request)
+
+        if runtime.settings.auth_required:
+            authorization = request.headers.get("Authorization", "")
+            scheme, _, token = authorization.partition(" ")
+            if scheme.lower() != "bearer" or not token.strip():
+                return _api_error(401, "unauthorized", "未提供有效的 Bearer Token")
+            try:
+                user = await runtime.auth_client.verify(token.strip())
+            except AuthenticationError as exc:
+                return _api_error(401, "unauthorized", str(exc))
+        else:
+            user = AuthenticatedUser(id=1, nickname="Development User")
+
+        request.state.current_user = user
+        context_token = bind_user(user.id)
+        try:
+            return await call_next(request)
+        finally:
+            reset_user(context_token)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -152,6 +197,10 @@ def create_app(
             checks["milvus"] = False
         if rt.settings.cache_provider == "redis":
             checks["redis_optional"] = rt.cache_provider.health()
+        if rt.settings.auth_required:
+            checks["auth"] = await rt.auth_client.health()
+        if rt.settings.billing_enabled:
+            checks["billing"] = await rt.billing_client.health()
         checks["embedding_config"] = rt.settings.embedding_provider == "deterministic" or bool(
             rt.settings.qwen_api_key
         )
@@ -172,9 +221,40 @@ def create_app(
             code,
         )
 
+    @app.api_route(
+        "/api/auth/{upstream_path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    )
+    async def proxy_auth(upstream_path: str, request: Request, rt: RuntimeDep) -> Response:
+        return await _proxy_request(
+            request,
+            rt.auth_client,
+            f"/api/auth/{upstream_path}",
+        )
+
+    @app.api_route(
+        "/api/billing/{upstream_path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    )
+    async def proxy_billing(upstream_path: str, request: Request, rt: RuntimeDep) -> Response:
+        if upstream_path == "internal" or upstream_path.startswith("internal/"):
+            return _api_error(404, "not_found", "接口不存在")
+        return await _proxy_request(
+            request,
+            rt.billing_client,
+            f"/api/billing/{upstream_path}",
+        )
+
     @app.post("/projects", response_model=NovelProject, status_code=201)
-    async def create_project(payload: ProjectCreate, session: SessionDep) -> NovelProject:
-        return ProjectService(session).create(**payload.model_dump())
+    async def create_project(
+        payload: ProjectCreate,
+        request: Request,
+        session: SessionDep,
+    ) -> NovelProject:
+        return ProjectService(session).create(
+            owner_user_id=_current_user(request).id,
+            **payload.model_dump(),
+        )
 
     @app.get("/projects", response_model=list[NovelProject])
     async def list_projects(session: SessionDep) -> list[NovelProject]:
@@ -714,6 +794,14 @@ def _register_error_handlers(app: FastAPI) -> None:
     async def configuration_error(_: Request, exc: ConfigurationError) -> JSONResponse:
         return response(503, "configuration_error", str(exc))
 
+    @app.exception_handler(BillingUnavailableError)
+    async def billing_unavailable(_: Request, exc: BillingUnavailableError) -> JSONResponse:
+        return response(503, "billing_unavailable", str(exc))
+
+    @app.exception_handler(InsufficientBalanceError)
+    async def insufficient_balance(_: Request, exc: InsufficientBalanceError) -> JSONResponse:
+        return response(402, "insufficient_balance", str(exc))
+
     async def bad_request(_: Request, exc: Exception) -> JSONResponse:
         return response(422, "invalid_request", str(exc))
 
@@ -729,6 +817,52 @@ def _register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(NovelHarnessError)
     async def domain_error(_: Request, exc: NovelHarnessError) -> JSONResponse:
         return response(400, "domain_error", str(exc))
+
+
+def _current_user(request: Request) -> AuthenticatedUser:
+    user = getattr(request.state, "current_user", None)
+    if not isinstance(user, AuthenticatedUser):
+        raise AuthenticationError("未找到当前登录用户")
+    return user
+
+
+def _api_error(status_code: int, error: str, message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": error, "message": message},
+    )
+
+
+async def _proxy_request(
+    request: Request,
+    client: ServiceClient,
+    path: str,
+) -> Response:
+    headers = {
+        key: value
+        for key, value in request.headers.items()
+        if key.lower() in {"accept", "authorization", "content-type"}
+    }
+    try:
+        upstream = await client.request(
+            request.method,
+            path,
+            headers=headers,
+            params=request.query_params.multi_items(),
+            content=await request.body(),
+        )
+    except ConnectionError:
+        return _api_error(503, "upstream_unavailable", "上游服务暂时不可用")
+    response_headers = {
+        key: value
+        for key, value in upstream.headers.items()
+        if key.lower() in {"content-type", "content-disposition", "cache-control"}
+    }
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=response_headers,
+    )
 
 
 app = create_app()

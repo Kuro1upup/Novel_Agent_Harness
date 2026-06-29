@@ -1,5 +1,20 @@
+export interface AuthUser {
+  id: number
+  email: string
+  phone?: string
+  nickname: string
+  avatar_url?: string
+}
+
+export interface BillingBalance {
+  total_recharge: number
+  total_consumption: number
+  balance: number
+}
+
 export interface Project {
   id: string
+  owner_user_id: number
   name: string
   genre: string
   sub_genre?: string

@@ -21,6 +21,7 @@ from novel_harness.agents import (
     WorldbuildingAgent,
 )
 from novel_harness.config import Settings, get_settings
+from novel_harness.integrations import AuthServiceClient, BillingServiceClient
 from novel_harness.providers import (
     CacheProvider,
     ContentFetcher,
@@ -64,6 +65,8 @@ class Runtime:
         embedding_provider: EmbeddingProvider | None = None,
         content_fetcher: ContentFetcher | None = None,
         cache_provider: CacheProvider | None = None,
+        auth_client: AuthServiceClient | None = None,
+        billing_client: BillingServiceClient | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self._engine = engine
@@ -75,6 +78,8 @@ class Runtime:
         self._embedding_provider = embedding_provider
         self._content_fetcher = content_fetcher
         self._cache_provider = cache_provider
+        self._auth_client = auth_client
+        self._billing_client = billing_client
 
     @cached_property
     def engine(self) -> Engine:
@@ -111,6 +116,22 @@ class Runtime:
     @cached_property
     def cache_provider(self) -> CacheProvider:
         return self._cache_provider or build_cache_provider(self.settings)
+
+    @cached_property
+    def auth_client(self) -> AuthServiceClient:
+        return self._auth_client or AuthServiceClient(
+            self.settings.auth_service_url,
+            timeout_seconds=self.settings.auth_request_timeout_seconds,
+        )
+
+    @cached_property
+    def billing_client(self) -> BillingServiceClient:
+        return self._billing_client or BillingServiceClient(
+            self.settings.billing_service_url,
+            internal_api_key=self.settings.billing_internal_api_key,
+            timeout_seconds=self.settings.billing_request_timeout_seconds,
+            required=self.settings.billing_required,
+        )
 
     def document_service(self, session: Session) -> DocumentService:
         return DocumentService(
@@ -183,6 +204,7 @@ class Runtime:
             provider=selected,
             input_cost_per_million=self.settings.llm_input_cost_per_million,
             output_cost_per_million=self.settings.llm_output_cost_per_million,
+            billing_client=self.billing_client if self.settings.billing_enabled else None,
             persistence_factory=(
                 self.session_factory
                 if session.bind is not None and session.bind.dialect.name != "sqlite"
@@ -233,3 +255,20 @@ class Runtime:
         engine = self._engine or self.__dict__.get("engine")
         if engine is not None:
             engine.dispose()
+
+    async def aclose(self) -> None:
+        """Close both synchronous providers and async service clients."""
+
+        self.close()
+        clients = {
+            id(client): client
+            for client in (
+                self._auth_client,
+                self.__dict__.get("auth_client"),
+                self._billing_client,
+                self.__dict__.get("billing_client"),
+            )
+            if client is not None
+        }
+        for client in clients.values():
+            await client.aclose()

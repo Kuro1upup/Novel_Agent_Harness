@@ -3,13 +3,20 @@
 ## 运行拓扑
 
 API 和 Worker 使用同一个镜像、同一套环境变量，并连接现有 MySQL、MinIO、Milvus
-和可选 Redis。API 与 Worker 可以独立扩缩容；迁移只在发布阶段执行一次。
+和可选 Redis。Auth 与 Billing 使用独立 Go 镜像。三个业务组件共享一个 MySQL 实例，
+但分别使用 `novel_agent`、`novel_auth`、`novel_billing` 数据库。API 与 Worker
+可以独立扩缩容；迁移只在发布阶段执行一次。
 
 ```bash
 novel-harness db migrate
+(cd billing && go run ./cmd/server)
+(cd auth && go run ./cmd/server)
 uvicorn novel_harness.api:app --host 0.0.0.0 --port 8000
 novel-harness worker
 ```
+
+发布检查必须确认 Auth/Billing 的 `JWT_SECRET` 一致，且三个服务的
+`BILLING_INTERNAL_API_KEY` 一致。`/health/ready` 会把 Auth 和 Billing 纳入必需依赖。
 
 ## 日志与告警
 

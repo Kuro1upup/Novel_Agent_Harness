@@ -68,6 +68,18 @@ class Settings(BaseSettings):
     redis_database: int = 0
     redis_cache_ttl_seconds: int = 900
 
+    auth_required: bool = True
+    auth_service_url: str = "http://localhost:8001"
+    auth_request_timeout_seconds: float = 5.0
+    auth_database_name: str = "novel_auth"
+
+    billing_enabled: bool = True
+    billing_required: bool = True
+    billing_service_url: str = "http://localhost:8002"
+    billing_internal_api_key: str = ""
+    billing_request_timeout_seconds: float = 5.0
+    billing_database_name: str = "novel_billing"
+
     request_timeout_seconds: float = 30.0
     provider_max_retries: int = 2
     research_fetch_enabled: bool = True

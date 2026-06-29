@@ -1,5 +1,7 @@
 import type {
   AgentRun,
+  AuthUser,
+  BillingBalance,
   Draft,
   MemoryHit,
   PlotPlan,
@@ -11,6 +13,21 @@ import type {
 
 const API_URL = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') ||
   'http://localhost:8000'
+const TOKEN_KEY = 'novel-harness-token'
+
+let accessToken = window.localStorage.getItem(TOKEN_KEY) || ''
+
+export const authSession = {
+  hasToken: () => Boolean(accessToken),
+  setToken: (token: string) => {
+    accessToken = token
+    window.localStorage.setItem(TOKEN_KEY, token)
+  },
+  clear: () => {
+    accessToken = ''
+    window.localStorage.removeItem(TOKEN_KEY)
+  },
+}
 
 export class ApiError extends Error {
   constructor(
@@ -25,18 +42,58 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     headers: {
-      'Content-Type': 'application/json',
+      ...(init?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       ...init?.headers,
     },
   })
   if (!response.ok) {
     const payload = await response.json().catch(() => null)
-    throw new ApiError(payload?.message || `请求失败（${response.status}）`, response.status)
+    if (response.status === 401 && !path.endsWith('/login')) {
+      authSession.clear()
+      window.dispatchEvent(new Event('auth-expired'))
+    }
+    throw new ApiError(
+      payload?.message || payload?.detail || payload?.error || `请求失败（${response.status}）`,
+      response.status,
+    )
   }
   return response.json() as Promise<T>
 }
 
 export const api = {
+  login: (login: string, password: string) =>
+    request<{ success: boolean; token: string; user: AuthUser }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ login, password }),
+    }),
+  me: () => request<{ success: boolean; user: AuthUser }>('/api/auth/me'),
+  sendRegisterCode: (method: 'email' | 'phone', value: string) =>
+    request<{ success: boolean; message: string }>('/api/auth/send-code', {
+      method: 'POST',
+      body: JSON.stringify({
+        method,
+        email: method === 'email' ? value : '',
+        phone: method === 'phone' ? value : '',
+      }),
+    }),
+  register: (
+    method: 'email' | 'phone',
+    value: string,
+    password: string,
+    code: string,
+  ) =>
+    request<{ success: boolean; user: AuthUser }>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        method,
+        password,
+        code,
+        email: method === 'email' ? value : '',
+        phone: method === 'phone' ? value : '',
+      }),
+    }),
+  balance: () => request<BillingBalance & { success: boolean }>('/api/billing/balance'),
   projects: () => request<Project[]>('/projects'),
   createProject: (payload: Partial<Project>) =>
     request<Project>('/projects', { method: 'POST', body: JSON.stringify(payload) }),
@@ -167,5 +224,17 @@ export const api = {
     ),
   agentRuns: (projectId: string) =>
     request<AgentRun[]>(`/projects/${projectId}/agent-runs?limit=50`),
-  downloadUrl: (draftId: string) => `${API_URL}/drafts/${draftId}/download`,
+  downloadDraft: async (draftId: string) => {
+    const response = await fetch(`${API_URL}/drafts/${draftId}/download`, {
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+    })
+    if (!response.ok) {
+      if (response.status === 401) {
+        authSession.clear()
+        window.dispatchEvent(new Event('auth-expired'))
+      }
+      throw new ApiError(`下载失败（${response.status}）`, response.status)
+    }
+    return response.blob()
+  },
 }

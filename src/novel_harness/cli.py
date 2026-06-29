@@ -14,6 +14,7 @@ import typer
 from alembic import command
 from alembic.config import Config
 from fastapi.encoders import jsonable_encoder
+from sqlalchemy import update
 
 from novel_harness.config import get_settings
 from novel_harness.core.workflow import WorkflowWorker
@@ -26,6 +27,7 @@ from novel_harness.storage import (
     provision_mysql,
     session_scope,
 )
+from novel_harness.storage.orm import NovelProjectORM
 
 app = typer.Typer(
     name="novel-harness",
@@ -715,6 +717,29 @@ def db_migrate() -> None:
     config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
     command.upgrade(config, "head")
     typer.echo("MySQL schema is at the latest revision.")
+
+
+@db_app.command("assign-legacy-owner")
+def db_assign_legacy_owner(
+    user_id: int = typer.Argument(..., min=1, help="User ID from the novel_auth users table."),
+    confirm: bool = typer.Option(
+        False,
+        "--confirm",
+        help="Confirm assigning every currently unowned project to this user.",
+    ),
+) -> None:
+    """Assign pre-authentication projects to an explicitly selected Auth user."""
+
+    if not confirm:
+        raise typer.BadParameter("pass --confirm after verifying the target Auth user ID")
+    with session_scope(runtime().session_factory) as session:
+        result = session.execute(
+            update(NovelProjectORM)
+            .where(NovelProjectORM.owner_user_id == 0)
+            .values(owner_user_id=user_id)
+        )
+        count = int(getattr(result, "rowcount", 0) or 0)
+    output({"owner_user_id": user_id, "assigned_projects": count})
 
 
 @vector_app.command("rebuild")

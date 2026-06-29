@@ -35,6 +35,7 @@ from novel_harness.models import (
     WorkflowStep,
 )
 from novel_harness.models.base import ProjectResource, utc_now
+from novel_harness.security import current_user_id
 
 from .orm import (
     AgentRunORM,
@@ -84,6 +85,7 @@ class ProjectRepository:
         self.session.add(
             NovelProjectORM(
                 id=project.id,
+                owner_user_id=project.owner_user_id,
                 name=project.name,
                 genre=project.genre,
                 sub_genre=project.sub_genre,
@@ -100,7 +102,11 @@ class ProjectRepository:
     create = add
 
     def get(self, project_id: str) -> NovelProject | None:
-        record = self.session.get(NovelProjectORM, project_id)
+        statement = select(NovelProjectORM).where(NovelProjectORM.id == project_id)
+        owner_user_id = current_user_id()
+        if owner_user_id is not None:
+            statement = statement.where(NovelProjectORM.owner_user_id == owner_user_id)
+        record = self.session.scalar(statement)
         return self._to_domain(record) if record is not None else None
 
     def require(self, project_id: str) -> NovelProject:
@@ -113,10 +119,17 @@ class ProjectRepository:
         statement = (
             select(NovelProjectORM).order_by(NovelProjectORM.created_at).offset(offset).limit(limit)
         )
+        owner_user_id = current_user_id()
+        if owner_user_id is not None:
+            statement = statement.where(NovelProjectORM.owner_user_id == owner_user_id)
         return [self._to_domain(item) for item in self.session.scalars(statement)]
 
     def update(self, project: NovelProject) -> NovelProject:
-        record = self.session.get(NovelProjectORM, project.id)
+        statement = select(NovelProjectORM).where(NovelProjectORM.id == project.id)
+        owner_user_id = current_user_id()
+        if owner_user_id is not None:
+            statement = statement.where(NovelProjectORM.owner_user_id == owner_user_id)
+        record = self.session.scalar(statement)
         if record is None:
             raise ResourceNotFoundError(f"Novel project {project.id!r} was not found")
         project.updated_at = utc_now()
@@ -134,9 +147,11 @@ class ProjectRepository:
         return project
 
     def delete(self, project_id: str) -> bool:
-        result = self.session.execute(
-            delete(NovelProjectORM).where(NovelProjectORM.id == project_id)
-        )
+        statement = delete(NovelProjectORM).where(NovelProjectORM.id == project_id)
+        owner_user_id = current_user_id()
+        if owner_user_id is not None:
+            statement = statement.where(NovelProjectORM.owner_user_id == owner_user_id)
+        result = self.session.execute(statement)
         return bool(cast(CursorResult[Any], result).rowcount)
 
     @staticmethod
@@ -174,7 +189,9 @@ class JsonRepository(Generic[ModelT]):
     create = add
 
     def get(self, resource_id: str) -> ModelT | None:
-        record = self.session.get(self.orm_model, resource_id)
+        statement = select(self.orm_model).where(self.orm_model.id == resource_id)
+        statement = self._scope_to_owner(statement)
+        record = self.session.scalar(statement)
         if record is None:
             return None
         return self.domain_model.model_validate(record.payload)
@@ -195,13 +212,16 @@ class JsonRepository(Generic[ModelT]):
             .offset(offset)
             .limit(limit)
         )
+        statement = self._scope_to_owner(statement)
         return [
             self.domain_model.model_validate(record.payload)
             for record in self.session.scalars(statement)
         ]
 
     def update(self, model: ModelT) -> ModelT:
-        record = self.session.get(self.orm_model, model.id)
+        statement = select(self.orm_model).where(self.orm_model.id == model.id)
+        statement = self._scope_to_owner(statement)
+        record = self.session.scalar(statement)
         if record is None:
             raise ResourceNotFoundError(f"{self.domain_model.__name__} {model.id!r} was not found")
         if record.project_id != model.project_id:
@@ -216,10 +236,24 @@ class JsonRepository(Generic[ModelT]):
         return model
 
     def delete(self, resource_id: str) -> bool:
-        result = self.session.execute(
-            delete(self.orm_model).where(self.orm_model.id == resource_id)
-        )
+        statement = delete(self.orm_model).where(self.orm_model.id == resource_id)
+        owner_user_id = current_user_id()
+        if owner_user_id is not None:
+            owned_projects = select(NovelProjectORM.id).where(
+                NovelProjectORM.owner_user_id == owner_user_id
+            )
+            statement = statement.where(self.orm_model.project_id.in_(owned_projects))
+        result = self.session.execute(statement)
         return bool(cast(CursorResult[Any], result).rowcount)
+
+    def _scope_to_owner(self, statement: Any) -> Any:
+        owner_user_id = current_user_id()
+        if owner_user_id is None:
+            return statement
+        return statement.join(
+            NovelProjectORM,
+            self.orm_model.project_id == NovelProjectORM.id,
+        ).where(NovelProjectORM.owner_user_id == owner_user_id)
 
 
 class StyleProfileRepository(JsonRepository[StyleProfile]):
@@ -509,9 +543,9 @@ class CanonPatchRepository(JsonRepository[CanonPatch]):
         }
 
     def get_by_draft(self, draft_id: str) -> CanonPatch | None:
-        record = self.session.scalar(
-            select(CanonPatchORM).where(CanonPatchORM.draft_id == draft_id)
-        )
+        statement = select(CanonPatchORM).where(CanonPatchORM.draft_id == draft_id)
+        statement = self._scope_to_owner(statement)
+        record = self.session.scalar(statement)
         return CanonPatch.model_validate(record.payload) if record else None
 
 
@@ -589,11 +623,10 @@ class WorkflowRunRepository(JsonRepository[WorkflowRun]):
         return WorkflowRun.model_validate(record.payload) if record else None
 
     def require_for_update(self, run_id: str) -> WorkflowRun:
+        statement = select(WorkflowRunORM).where(WorkflowRunORM.id == run_id)
+        statement = self._scope_to_owner(statement)
         record = self.session.scalar(
-            select(WorkflowRunORM)
-            .where(WorkflowRunORM.id == run_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
+            statement.with_for_update().execution_options(populate_existing=True)
         )
         if record is None:
             raise ResourceNotFoundError(f"WorkflowRun {run_id!r} was not found")

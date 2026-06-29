@@ -70,6 +70,8 @@ main { grid-column: 2; min-width: 0; }
 .topbar h1 { margin: 4px 0 0; font: 700 23px "Noto Serif SC", serif; }
 .eyebrow { color: var(--red); font-size: 10px; font-weight: 700; letter-spacing: .15em; text-transform: uppercase; }
 .topbar-meta { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.topbar-meta strong { color: #48463f; font-size: 11px; }
+.topbar-meta .icon-button { color: #8b594f; padding: 5px; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #5f806b; box-shadow: 0 0 0 4px #dce7de; }
 .workspace { max-width: 1440px; margin: 0 auto; padding: 36px 42px 70px; }
 .page-stack { display: grid; gap: 24px; }
@@ -257,6 +259,7 @@ main { grid-column: 2; min-width: 0; }
 .toast.error svg { color: #e3998f; }
 .toast button { display: grid; place-items: center; margin-left: 6px; padding: 0; border: 0; color: #aaa79e; background: transparent; }
 .form-error { color: var(--red); font-size: 11px; }
+.form-notice { color: var(--green); font-size: 11px; }
 
 .onboarding { min-height: 100vh; display: grid; grid-template-columns: 1.15fr .85fr; align-items: center; gap: 8vw; padding: 8vw; background: radial-gradient(circle at 20% 20%, #363128 0, #1c1c18 45%, #151512 100%); }
 .onboarding-copy { max-width: 650px; color: #f7f1e6; }
@@ -264,6 +267,22 @@ main { grid-column: 2; min-width: 0; }
 .onboarding-copy p { max-width: 520px; color: #969188; line-height: 1.9; }
 .onboarding-card { max-width: 460px; width: 100%; padding: 34px; border: 1px solid #d8d0c0; border-radius: 15px; background: #f8f5ed; box-shadow: 0 30px 80px rgba(0,0,0,.3); }
 .onboarding-card h2 { margin: 0 0 24px; font: 700 23px "Noto Serif SC", serif; }
+.auth-card { max-width: 430px; }
+.auth-tabs, .contact-tabs {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
+  padding: 4px; margin-bottom: 22px; border-radius: 9px; background: #e9e4da;
+}
+.auth-tabs button, .contact-tabs button {
+  min-height: 36px; border: 0; border-radius: 7px; color: #77736a; background: transparent;
+}
+.auth-tabs button.active, .contact-tabs button.active {
+  color: var(--ink); background: #fff; box-shadow: 0 3px 10px rgba(0,0,0,.06);
+}
+.contact-tabs { margin: -8px 0 18px; background: transparent; border: 1px solid #ddd6ca; }
+.contact-tabs button { min-height: 30px; font-size: 11px; }
+.verification-row { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 9px; }
+.verification-row .secondary { margin-bottom: 14px; }
+.onboarding-logout { position: fixed; top: 22px; right: 24px; z-index: 5; }
 .scrim { display: none; }
 
 @keyframes spin { to { transform: rotate(360deg); } }

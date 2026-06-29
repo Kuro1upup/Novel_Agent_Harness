@@ -10,6 +10,7 @@ import {
   GitCompare,
   LayoutDashboard,
   Library,
+  LogOut,
   Menu,
   Network,
   PenLine,
@@ -17,12 +18,14 @@ import {
   Search,
   Send,
   Sparkles,
+  WalletCards,
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
-import { api } from './api'
+import { api, authSession } from './api'
 import type {
   AgentRun,
+  AuthUser,
   Draft,
   MemoryHit,
   PlotPlan,
@@ -57,6 +60,41 @@ const statusLabels: Record<string, string> = {
 }
 
 function App() {
+  const [user, setUser] = useState<AuthUser>()
+  const [checking, setChecking] = useState(authSession.hasToken())
+
+  useEffect(() => {
+    const expire = () => setUser(undefined)
+    window.addEventListener('auth-expired', expire)
+    if (authSession.hasToken()) {
+      api.me()
+        .then((result) => setUser(result.user))
+        .catch(() => authSession.clear())
+        .finally(() => setChecking(false))
+    }
+    return () => window.removeEventListener('auth-expired', expire)
+  }, [])
+
+  if (checking) {
+    return (
+      <div className="center-screen">
+        <div className="ink-loader" />
+        <span>正在验证登录状态…</span>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <AuthScreen onAuthenticated={setUser} />
+  }
+
+  return <Workspace user={user} onLogout={() => {
+    authSession.clear()
+    setUser(undefined)
+  }} />
+}
+
+function Workspace({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
   const [projects, setProjects] = useState<Project[]>([])
   const [projectId, setProjectId] = useState('')
   const [tab, setTab] = useState<Tab>('overview')
@@ -64,6 +102,7 @@ function App() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(true)
+  const [balance, setBalance] = useState<number>()
 
   const loadProjects = useCallback(async () => {
     try {
@@ -79,6 +118,7 @@ function App() {
 
   useEffect(() => {
     void loadProjects()
+    api.balance().then((result) => setBalance(result.balance)).catch(() => undefined)
   }, [loadProjects])
 
   useEffect(() => {
@@ -107,10 +147,15 @@ function App() {
   }
 
   if (!projects.length) {
-    return <ProjectOnboarding onCreated={(created) => {
-      setProjects([created])
-      setProjectId(created.id)
-    }} />
+    return <>
+      <button className="onboarding-logout secondary" onClick={onLogout}>
+        <LogOut size={15} />退出登录
+      </button>
+      <ProjectOnboarding onCreated={(created) => {
+        setProjects([created])
+        setProjectId(created.id)
+      }} />
+    </>
   }
 
   return (
@@ -174,8 +219,12 @@ function App() {
             <h1>{navItems.find((item) => item.id === tab)?.label}</h1>
           </div>
           <div className="topbar-meta">
-            <span className="live-dot" />
-            工作台已连接
+            <WalletCards size={15} />
+            <span>¥{balance?.toFixed(2) ?? '—'}</span>
+            <strong>{user.nickname || user.email || user.phone}</strong>
+            <button className="icon-button" title="退出登录" onClick={onLogout}>
+              <LogOut size={16} />
+            </button>
           </div>
         </header>
 
@@ -204,6 +253,111 @@ function App() {
       {mobileOpen && <button className="scrim" onClick={() => setMobileOpen(false)} />}
       {error && <Toast kind="error" message={error} onClose={() => setError('')} />}
       {notice && <Toast kind="success" message={notice} onClose={() => setNotice('')} />}
+    </div>
+  )
+}
+
+function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void }) {
+  const [mode, setMode] = useState<'login' | 'register'>('login')
+  const [method, setMethod] = useState<'email' | 'phone'>('email')
+  const [login, setLogin] = useState('')
+  const [password, setPassword] = useState('')
+  const [code, setCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+
+  const submit = async () => {
+    if (!login.trim() || !password) return
+    setBusy(true)
+    setError('')
+    try {
+      if (mode === 'register') {
+        await api.register(method, login.trim(), password, code)
+      }
+      const result = await api.login(login.trim(), password)
+      authSession.setToken(result.token)
+      onAuthenticated(result.user)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '认证失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const sendCode = async () => {
+    if (!login.trim()) return
+    setBusy(true)
+    setError('')
+    try {
+      const result = await api.sendRegisterCode(method, login.trim())
+      setMessage(result.message)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '验证码发送失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="onboarding auth-page">
+      <div className="onboarding-copy">
+        <div className="brand-mark large">砚</div>
+        <span className="eyebrow">Novel Harness</span>
+        <h1>每一部作品，都只属于它的作者。</h1>
+        <p>登录后，作品、长期记忆与生成用量会按账户独立保存和计费。</p>
+      </div>
+      <div className="onboarding-card auth-card">
+        <div className="auth-tabs">
+          <button className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>
+            登录
+          </button>
+          <button className={mode === 'register' ? 'active' : ''} onClick={() => setMode('register')}>
+            注册
+          </button>
+        </div>
+        {mode === 'register' && (
+          <div className="contact-tabs">
+            <button className={method === 'email' ? 'active' : ''} onClick={() => setMethod('email')}>
+              邮箱
+            </button>
+            <button className={method === 'phone' ? 'active' : ''} onClick={() => setMethod('phone')}>
+              手机号
+            </button>
+          </div>
+        )}
+        <Field
+          label={mode === 'login' ? '邮箱或手机号' : method === 'email' ? '邮箱' : '手机号'}
+          value={login}
+          onChange={setLogin}
+          placeholder={method === 'email' ? 'author@example.com' : '13800000000'}
+        />
+        <Field
+          label="密码"
+          value={password}
+          onChange={setPassword}
+          placeholder="至少 6 位"
+          type="password"
+        />
+        {mode === 'register' && (
+          <div className="verification-row">
+            <Field label="验证码" value={code} onChange={setCode} placeholder="6 位验证码" />
+            <button className="secondary" disabled={busy || !login} onClick={() => void sendCode()}>
+              发送验证码
+            </button>
+          </div>
+        )}
+        {message && <p className="form-notice">{message}</p>}
+        {error && <p className="form-error">{error}</p>}
+        <button
+          className="primary wide"
+          disabled={busy || !login || !password || (mode === 'register' && code.length !== 6)}
+          onClick={() => void submit()}
+        >
+          {busy ? '处理中…' : mode === 'login' ? '进入工作台' : '注册并登录'}
+          <ChevronRight size={17} />
+        </button>
+      </div>
     </div>
   )
 }
@@ -775,7 +929,17 @@ function DraftWorkspace({
                     setDiff((await api.diffDrafts(draft.parent_draft_id!, draft.id)).unified_diff)
                   } catch (reason) { fail(reason) }
                 }}><GitCompare size={15} />版本差异</button>}
-                <a className="secondary button-link" href={api.downloadUrl(draft.id)}><Download size={15} />下载</a>
+                <button className="secondary" onClick={async () => {
+                  try {
+                    const blob = await api.downloadDraft(draft.id)
+                    const url = URL.createObjectURL(blob)
+                    const link = document.createElement('a')
+                    link.href = url
+                    link.download = `${draft.id}.md`
+                    link.click()
+                    URL.revokeObjectURL(url)
+                  } catch (reason) { fail(reason) }
+                }}><Download size={15} />下载</button>
               </div>
             </div>
             {diff ? <pre className="diff-view">{diff || '两个版本没有文本差异。'}</pre> : <article className="manuscript">{draft.body}</article>}
@@ -855,8 +1019,8 @@ function EntryPanel({ title, entries }: { title: string; entries: Array<Record<s
   return <Panel title={`${title} · ${entries.length}`}><ul className="entry-list">{entries.slice(0, 6).map((item, index) => <li key={index}>{typeof item === 'string' ? item : String(item.name || item.description || JSON.stringify(item))}</li>)}{!entries.length && <li className="muted">尚未设置</li>}</ul></Panel>
 }
 
-function Field({ label, value, onChange, placeholder, multiline = false }: { label: string; value: string; onChange: (value: string) => void; placeholder: string; multiline?: boolean }) {
-  return <label className="field"><span>{label}</span>{multiline ? <textarea rows={3} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /> : <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />}</label>
+function Field({ label, value, onChange, placeholder, multiline = false, type = 'text' }: { label: string; value: string; onChange: (value: string) => void; placeholder: string; multiline?: boolean; type?: string }) {
+  return <label className="field"><span>{label}</span>{multiline ? <textarea rows={3} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /> : <input type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />}</label>
 }
 
 function RunRow({ run }: { run: AgentRun }) {

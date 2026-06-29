@@ -16,6 +16,7 @@ class ProjectService:
     def create(
         self,
         *,
+        owner_user_id: int = 0,
         name: str,
         genre: str,
         sub_genre: str | None = None,
@@ -24,6 +25,7 @@ class ProjectService:
         tone: str = "",
     ) -> NovelProject:
         project = NovelProject(
+            owner_user_id=owner_user_id,
             name=name,
             genre=genre,
             sub_genre=sub_genre,

@@ -73,18 +73,23 @@ def create_schema_for_testing(engine: Engine) -> None:
 
 
 def provision_mysql() -> None:
-    """Create the application database/user using configured root credentials.
+    """Create isolated application/Auth/Billing databases and the app user.
 
     This is an explicit installation operation. Normal application startup must
     use the restricted application account and must not call this function.
     """
 
     settings = Settings()
-    database = settings.database_name
+    databases = (
+        settings.database_name,
+        settings.auth_database_name,
+        settings.billing_database_name,
+    )
     app_user = settings.database_user
     app_password = settings.database_password
-    if not re.fullmatch(r"[A-Za-z0-9_]+", database):
-        raise ValueError("DATABASE_NAME may contain only letters, digits, and '_'")
+    for database in databases:
+        if not re.fullmatch(r"[A-Za-z0-9_]+", database):
+            raise ValueError("database names may contain only letters, digits, and '_'")
     if not re.fullmatch(r"[A-Za-z0-9_]+", app_user):
         raise ValueError("DATABASE_USER may contain only letters, digits, and '_'")
     escaped_password = app_password.replace("\\", "\\\\").replace("'", "\\'")
@@ -94,15 +99,18 @@ def provision_mysql() -> None:
         with engine.begin() as connection:
             connection.execute(
                 text(
-                    f"CREATE DATABASE IF NOT EXISTS `{database}` "
-                    "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
-                )
-            )
-            connection.execute(
-                text(
                     f"CREATE USER IF NOT EXISTS '{app_user}'@'%' IDENTIFIED BY '{escaped_password}'"
                 )
             )
-            connection.execute(text(f"GRANT ALL PRIVILEGES ON `{database}`.* TO '{app_user}'@'%'"))
+            for database in databases:
+                connection.execute(
+                    text(
+                        f"CREATE DATABASE IF NOT EXISTS `{database}` "
+                        "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                    )
+                )
+                connection.execute(
+                    text(f"GRANT ALL PRIVILEGES ON `{database}`.* TO '{app_user}'@'%'")
+                )
     finally:
         engine.dispose()

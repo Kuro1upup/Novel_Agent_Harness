@@ -8,6 +8,7 @@ const (
 	SubsystemKnowledgeBase   = "knowledge_base"
 	SubsystemSmartTranslator = "smart_translator"
 	SubsystemSmartGalgame    = "smart_galgame"
+	SubsystemNovelHarness    = "novel_harness"
 )
 
 // ModelPricing holds per-million-token pricing for a model.

@@ -25,14 +25,17 @@ func Load() *Config {
 		JWTSecret:      getEnv("JWT_SECRET", "change-me-in-production"),
 		MySQLHost:      getEnv("MYSQL_HOST", "localhost"),
 		MySQLPort:      getEnv("MYSQL_PORT", "3306"),
-		MySQLUser:      getEnv("MYSQL_USER", "sql_copilot"),
-		MySQLPassword:  getEnv("MYSQL_PASSWORD", "sql_copilot_password"),
-		MySQLDatabase:  getEnv("MYSQL_DATABASE", "sql_copilot"),
+		MySQLUser:      getEnv("MYSQL_USER", "novel_agent"),
+		MySQLPassword:  getEnv("MYSQL_PASSWORD", "novel_agent_password"),
+		MySQLDatabase:  getEnv("MYSQL_DATABASE", "novel_billing"),
 		RedisHost:      getEnv("REDIS_HOST", "localhost"),
-		RedisPort:      getEnv("REDIS_PORT", "6379"),
+		RedisPort:      getEnv("REDIS_PORT", "20005"),
 		RedisPassword:  getEnv("REDIS_PASSWORD", "myredissecret"),
-		InternalAPIKey: getEnv("INTERNAL_API_KEY", "internal-key-change-me"),
-		AdminPassword:  getEnv("ADMIN_PASSWORD", "7ujm<KI*"),
+		InternalAPIKey: getEnv(
+			"BILLING_INTERNAL_API_KEY",
+			getEnv("INTERNAL_API_KEY", "internal-key-change-me"),
+		),
+		AdminPassword: getEnv("ADMIN_PASSWORD", "change-me-in-production"),
 	}
 }
 

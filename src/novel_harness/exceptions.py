@@ -9,6 +9,18 @@ class ConfigurationError(NovelHarnessError):
     """The runtime configuration is invalid."""
 
 
+class AuthenticationError(NovelHarnessError):
+    """A request does not carry valid user authentication."""
+
+
+class BillingUnavailableError(NovelHarnessError):
+    """The billing service cannot authorize a paid operation."""
+
+
+class InsufficientBalanceError(NovelHarnessError):
+    """The authenticated user has no remaining balance."""
+
+
 class ResourceNotFoundError(NovelHarnessError):
     """A requested domain resource does not exist."""
 

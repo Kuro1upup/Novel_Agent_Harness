@@ -36,6 +36,8 @@ Story Bible、剧情规划、章节生成、连续性检查和事实检查组织
 | MinIO | 原始文档、解析文本、章节正文和大型产物 |
 | Milvus 2 | 按 `project_id` 隔离的文档与上下文向量 |
 | Redis 7 | 可丢弃的版本化查询缓存与工作流事件通知；故障时自动降级 |
+| Auth (Go) | 邮箱/手机号注册登录、JWT、用户资料；数据位于独立 `novel_auth` 库 |
+| Billing (Go) | 余额、充值和 Token 用量账单；数据位于独立 `novel_billing` 库 |
 | LLM Provider | 默认 DeepSeek `deepseek-v4-flash`，可切换 Mock/其他兼容接口 |
 | Search Provider | Mock 或 SearXNG JSON Search API |
 | Embedding Provider | 默认百炼 `text-embedding-v4` 1024 维；确定性实现用于离线测试 |
@@ -69,6 +71,14 @@ novel-harness db init
 - MinIO Console：`localhost:20001`
 - Milvus：`localhost:19530`
 - Redis：`localhost:20005`
+- Auth：`localhost:8001`（由 API 网关通过 `/api/auth/*` 转发）
+- Billing：`localhost:8002`（由 API 网关通过 `/api/billing/*` 转发）
+- API：`localhost:8000`
+- Web：`localhost:5173`
+
+MySQL 使用同一个实例中的三个数据库：`novel_agent` 保存创作数据，`novel_auth`
+保存用户，`novel_billing` 保存余额和账单。`novel-harness db init` 会创建三个库并
+向受限应用账户授权。
 
 建议的本地 `.env`：
 
@@ -80,6 +90,16 @@ DATABASE_ROOT_USER=root
 DATABASE_ROOT_PASSWORD=root_password
 DATABASE_USER=novel_agent
 DATABASE_PASSWORD=novel_agent_password
+
+AUTH_REQUIRED=true
+AUTH_SERVICE_URL=http://localhost:8001
+AUTH_DATABASE_NAME=novel_auth
+
+BILLING_ENABLED=true
+BILLING_REQUIRED=true
+BILLING_SERVICE_URL=http://localhost:8002
+BILLING_INTERNAL_API_KEY=replace-with-a-shared-random-secret
+BILLING_DATABASE_NAME=novel_billing
 
 MINIO_ENDPOINT=localhost:20000
 MINIO_ACCESS_KEY=minioadmin
@@ -116,6 +136,9 @@ RESEARCH_FETCH_ENABLED=true
 root 数据库账户只由 `novel-harness db init` 使用。应用运行时使用权限受限的
 `novel_agent` 账户。生产环境必须更换示例凭据并通过密钥管理系统注入。
 
+Auth 与 Billing 必须使用相同的 `JWT_SECRET`；Auth、Billing 和 Python API 必须使用
+相同的 `BILLING_INTERNAL_API_KEY`。实际密钥只放在各自未跟踪的 `.env` 中。
+
 ## 本地开发
 
 本项目可以直接连接已有的 MySQL、MinIO、Milvus、Redis 和 SearXNG，不要求使用
@@ -150,6 +173,13 @@ CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:5173
 cd /home/gxl77/codex_dev
 source .venv/bin/activate
 novel-harness db migrate
+```
+
+本地直接运行 Go 服务：
+
+```bash
+(cd billing && go run ./cmd/server)
+(cd auth && go run ./cmd/server)
 ```
 
 启动 FastAPI 开发服务器：
@@ -287,29 +317,39 @@ novel-harness draft reject DRAFT_ID --reason "节奏不符合预期"
 uvicorn novel_harness.api:app --host 127.0.0.1 --port 8000
 ```
 
-基础流程：
+先通过统一 API 网关登录，再把 Token 用于业务请求：
 
 ```bash
+TOKEN=$(curl -sS -X POST http://127.0.0.1:8000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"login":"author@example.com","password":"your-password"}' | jq -r .token)
+
 curl -X POST http://127.0.0.1:8000/projects \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"name":"长安旧梦","genre":"历史","sub_genre":"西汉"}'
 
 curl -X POST http://127.0.0.1:8000/projects/PROJECT_ID/style/analyze \
+  -H "Authorization: Bearer $TOKEN" \
   -F 'files=@samples/style.txt'
 
 curl -X POST http://127.0.0.1:8000/projects/PROJECT_ID/research \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"topic":"西汉长安市井生活","keywords":["长安","市集"]}'
 
 curl -X POST http://127.0.0.1:8000/projects/PROJECT_ID/plot/plan \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"current":"主角抵达城外","goal":"进入长安"}'
 
 curl -X POST http://127.0.0.1:8000/projects/PROJECT_ID/write \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"goal":"主角第一次进入长安","current":"主角抵达城外"}'
 
 curl -X POST http://127.0.0.1:8000/projects/PROJECT_ID/workflows \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
     "goal":"主角第一次进入长安",
@@ -318,6 +358,17 @@ curl -X POST http://127.0.0.1:8000/projects/PROJECT_ID/workflows \
     "idempotency_key":"chapter-001"
   }'
 ```
+
+升级前已经存在的项目会以 `owner_user_id=0` 保留，不会自动暴露给任意新用户。注册并
+确认目标 Auth 用户 ID 后，显式执行一次：
+
+```bash
+novel-harness db assign-legacy-owner USER_ID --confirm
+```
+
+每次 Agent 调用会在执行前通过 Billing 检查余额，成功后按 Auth 用户 ID 上报输入和
+输出 Token。Billing 不可用或余额为负时，新的生成调用会被拒绝；已完成但用量上报
+失败的调用会记录 `billing_usage_report_failed` 错误日志。
 
 完整 OpenAPI 文档位于 `/docs`。`/health` 是进程存活检查，`/health/ready` 会检查
 MySQL、MinIO 和 Milvus。

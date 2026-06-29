@@ -40,19 +40,22 @@ func Load() *Config {
 		JWTSecret:     getEnv("JWT_SECRET", "change-me-in-production"),
 		MySQLHost:     getEnv("MYSQL_HOST", "localhost"),
 		MySQLPort:     getEnv("MYSQL_PORT", "3306"),
-		MySQLUser:     getEnv("MYSQL_USER", "sql_copilot"),
-		MySQLPassword: getEnv("MYSQL_PASSWORD", "sql_copilot_password"),
-		MySQLDatabase: getEnv("MYSQL_DATABASE", "sql_copilot"),
-		MinIOEndpoint:  getEnv("MINIO_ENDPOINT", "localhost:9000"),
+		MySQLUser:     getEnv("MYSQL_USER", "novel_agent"),
+		MySQLPassword: getEnv("MYSQL_PASSWORD", "novel_agent_password"),
+		MySQLDatabase: getEnv("MYSQL_DATABASE", "novel_auth"),
+		MinIOEndpoint:  getEnv("MINIO_ENDPOINT", "localhost:20000"),
 		MinIOAccessKey: getEnv("MINIO_ACCESS_KEY", "minioadmin"),
 		MinIOSecretKey: getEnv("MINIO_SECRET_KEY", "minioadmin"),
-		MinIOBucket:    getEnv("MINIO_BUCKET", "user-documents"),
+		MinIOBucket:    getEnv("MINIO_BUCKET", "novel-auth"),
 		BillingServiceURL: getEnv("BILLING_SERVICE_URL", "http://billing:8002"),
-		InternalAPIKey:    getEnv("INTERNAL_API_KEY", "internal-key-change-me"),
+		InternalAPIKey: getEnv(
+			"BILLING_INTERNAL_API_KEY",
+			getEnv("INTERNAL_API_KEY", "internal-key-change-me"),
+		),
 
 		// SMS (REST API with AppID/AppKey).
-		SMSAppID:      getEnv("SMS_APP_ID", "1401142936"),
-		SMSAppKey:     getEnv("SMS_APP_KEY", "d7d64a2140a9e7849567dae2026f90eb"),
+		SMSAppID:      getEnv("SMS_APP_ID", ""),
+		SMSAppKey:     getEnv("SMS_APP_KEY", ""),
 		SMSSignName:   getEnv("SMS_SIGN_NAME", ""),
 		SMSTemplateID: getEnv("SMS_TEMPLATE_ID", ""),
 
@@ -62,7 +65,7 @@ func Load() *Config {
 		SESRegion:        getEnv("SES_REGION", "ap-guangzhou"),
 
 		// Frontend.
-		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:3000"),
+		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 	}
 }
 
