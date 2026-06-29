@@ -20,6 +20,8 @@ from novel_harness.models import (
 from novel_harness.providers.cache import CacheProvider, NullCacheProvider
 from novel_harness.storage.repositories import Repositories
 
+from .manuscript_service import ManuscriptService
+
 logger = logging.getLogger("novel_harness.workflow")
 
 TERMINAL_RUN_STATUSES = {"succeeded", "failed", "cancelled"}
@@ -57,6 +59,7 @@ class WorkflowService:
         goal: str,
         current: str = "",
         research_topic: str | None = None,
+        chapter_id: str | None = None,
         auto_approve: bool = False,
         max_attempts: int = 3,
         idempotency_key: str | None = None,
@@ -66,6 +69,22 @@ class WorkflowService:
             raise ValueError("goal must not be empty")
         if not 1 <= max_attempts <= 20:
             raise ValueError("max_attempts must be between 1 and 20")
+        if chapter_id is not None:
+            ManuscriptService(self.session).require_chapter(project_id, chapter_id)
+            active = next(
+                (
+                    item
+                    for item in self.repositories.workflow_runs.list_for_project(
+                        project_id,
+                        limit=1000,
+                    )
+                    if item.parameters.get("chapter_id") == chapter_id
+                    and item.status not in TERMINAL_RUN_STATUSES
+                ),
+                None,
+            )
+            if active is not None:
+                return self.detail(active.id)
         normalized_key = idempotency_key.strip() if idempotency_key else None
         if normalized_key:
             existing = self.repositories.workflow_runs.get_by_idempotency_key(
@@ -82,6 +101,7 @@ class WorkflowService:
                 "goal": goal.strip(),
                 "current": current.strip(),
                 "research_topic": topic,
+                "chapter_id": chapter_id,
                 "auto_approve": auto_approve,
             },
             current_step="research" if topic else "memory_preflight",

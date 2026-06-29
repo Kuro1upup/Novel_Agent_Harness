@@ -320,6 +320,7 @@ def write(
     current: str = typer.Option("", "--current"),
     plan_id: str | None = typer.Option(None, "--plan-id"),
     option_id: str | None = typer.Option(None, "--option-id"),
+    chapter_id: str | None = typer.Option(None, "--chapter-id"),
 ) -> None:
     async def run() -> dict[str, Any]:
         with session_scope(runtime().session_factory) as session:
@@ -331,6 +332,7 @@ def write(
                 current_summary=current,
                 plot_plan=selected_plan,
                 selected_option_id=option_id,
+                chapter_id=chapter_id,
             )
             return {
                 "draft": draft.model_dump(mode="json"),
@@ -430,6 +432,36 @@ def draft_revise(
     output(asyncio.run(run()))
 
 
+@draft_app.command("edit")
+def draft_edit(
+    draft_id: str,
+    path: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
+    note: str = typer.Option("作者手工编辑", "--note"),
+    run_checks: bool = typer.Option(False, "--run-checks"),
+) -> None:
+    async def run() -> Any:
+        with session_scope(runtime().session_factory) as session:
+            draft, issues, risks, originality, patch_id = (
+                await runtime()
+                .generation_service(session)
+                .manually_revise_draft(
+                    draft_id,
+                    body=path.read_text(encoding="utf-8"),
+                    note=note,
+                    run_checks=run_checks,
+                )
+            )
+            return {
+                "draft": draft,
+                "continuity_issues": issues,
+                "fact_risks": risks,
+                "originality": asdict(originality),
+                "canon_patch_id": patch_id,
+            }
+
+    output(asyncio.run(run()))
+
+
 @draft_app.command("diff")
 def draft_diff(from_draft_id: str, to_draft_id: str) -> None:
     with session_scope(runtime().session_factory) as session:
@@ -442,6 +474,7 @@ def workflow_start(
     goal: str = typer.Option(..., "--goal"),
     current: str = typer.Option("", "--current"),
     research_topic: str | None = typer.Option(None, "--research-topic"),
+    chapter_id: str | None = typer.Option(None, "--chapter-id"),
     auto_approve: bool = typer.Option(False, "--auto-approve"),
     max_attempts: int = typer.Option(3, "--max-attempts", min=1, max=20),
     idempotency_key: str | None = typer.Option(None, "--idempotency-key"),
@@ -455,6 +488,7 @@ def workflow_start(
             goal=goal,
             current=current,
             research_topic=research_topic,
+            chapter_id=chapter_id,
             auto_approve=auto_approve,
             max_attempts=max_attempts,
             idempotency_key=idempotency_key,

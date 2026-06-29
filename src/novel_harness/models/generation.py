@@ -29,6 +29,7 @@ class GenerationResult(ProjectResource):
     bible_version: int = Field(default=1, ge=1)
     plot_plan_id: str | None = None
     selected_option_id: str | None = None
+    chapter_id: str | None = None
     parent_draft_id: str | None = None
     revision_number: int = Field(default=1, ge=1)
     revision_instruction: str = ""

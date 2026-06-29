@@ -174,6 +174,7 @@ class GenerationResultORM(ProjectOwnedMixin, Base):
     selected_option_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("plot_options.id", ondelete="SET NULL")
     )
+    chapter_id: Mapped[str | None] = mapped_column(String(36), index=True)
     parent_draft_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("generation_results.id", ondelete="SET NULL")
     )
@@ -207,6 +208,11 @@ class ManuscriptChapterORM(ProjectOwnedMixin, Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="planned")
     draft_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("generation_results.id", ondelete="SET NULL"),
+        unique=True,
+    )
+    accepted_draft_id: Mapped[str | None] = mapped_column(
         String(36),
         ForeignKey("generation_results.id", ondelete="SET NULL"),
         unique=True,

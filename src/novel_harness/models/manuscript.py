@@ -23,3 +23,4 @@ class ManuscriptChapter(ProjectResource):
     position: int = Field(default=1, ge=1)
     status: Literal["planned", "drafting", "accepted", "completed"] = "planned"
     draft_id: str | None = None
+    accepted_draft_id: str | None = None

@@ -224,8 +224,15 @@ main { grid-column: 2; min-width: 0; }
 .approval-box strong { font-size: 11px; }
 .approval-box p { margin: 4px 0 0; color: #84683e; font-size: 9px; }
 .approval-box select { max-width: 210px; min-height: 36px; padding: 0 9px; border: 1px solid #cfb68f; border-radius: 7px; color: #5d482b; background: #fffaf0; font-size: 10px; }
+.workflow-error { margin-top: 16px; padding: 11px 13px; color: #873d35; background: #f5e3df; border: 1px solid #dfbbb5; border-radius: 8px; font-size: 10px; white-space: pre-wrap; }
+.workflow-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 16px; }
 
 .manuscript-layout { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 20px; align-items: start; }
+.chapter-workflow-card { padding: 22px; border: 1px solid #d8c7b3; border-radius: 12px; background: #f7f0e4; box-shadow: var(--shadow); }
+.chapter-workflow-card > header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 18px; }
+.chapter-workflow-card h3 { margin: 5px 0 0; font: 600 19px "Noto Serif SC", serif; }
+.chapter-workflow-form { display: grid; grid-template-columns: 1fr 1fr 1fr auto; align-items: end; gap: 12px; }
+.chapter-workflow-form .field { margin-bottom: 0; }
 .outline-list { display: grid; gap: 14px; }
 .volume-card { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); box-shadow: 0 6px 24px rgba(43,38,25,.035); }
 .volume-card > header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 17px 20px; border-bottom: 1px solid #e6e1d6; background: #f4f0e7; }
@@ -257,6 +264,12 @@ main { grid-column: 2; min-width: 0; }
 .editor-toolbar > div { display: flex; align-items: center; gap: 9px; }
 .editor-toolbar strong { font-size: 11px; }
 .manuscript { max-width: 760px; min-height: 430px; margin: 0 auto; padding: 45px 48px; white-space: pre-wrap; color: #292820; font: 500 15px/2.05 "Noto Serif SC", serif; }
+.manual-editor { padding: 24px; }
+.manual-editor > textarea { width: 100%; min-height: 520px; padding: 25px; border: 1px solid #cfc8bb; border-radius: 9px; color: #292820; background: #fffefb; font: 500 15px/2.05 "Noto Serif SC", serif; resize: vertical; outline: none; }
+.manual-editor > textarea:focus { border-color: #ad746b; box-shadow: 0 0 0 3px rgba(166,61,49,.08); }
+.manual-editor-options { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 18px; margin-top: 14px; }
+.manual-editor-options .field { margin-bottom: 0; }
+.check-field { display: flex; align-items: center; gap: 7px; color: #68645b; font-size: 10px; }
 .diff-view { min-height: 430px; overflow: auto; margin: 0; padding: 30px; color: #d4d0c7; background: #23231f; font: 11px/1.7 ui-monospace, monospace; }
 .draft-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 18px 22px; border-top: 1px solid #e5e0d6; background: #f5f1e8; }
 .draft-meta > div { padding: 12px; border-radius: 8px; background: #faf8f2; }
@@ -392,6 +405,7 @@ main { grid-column: 2; min-width: 0; }
   .draft-list > button { min-width: 180px; }
   .manuscript { padding: 32px 22px; font-size: 14px; }
   .editor-toolbar { align-items: flex-start; flex-direction: column; padding: 14px; }
+  .chapter-workflow-form, .manual-editor-options { grid-template-columns: 1fr; }
   .chapter-row { grid-template-columns: 28px 1fr auto; padding: 10px 0; }
   .chapter-row select { grid-column: 2 / -1; grid-row: 2; }
   .draft-meta { grid-template-columns: 1fr; }

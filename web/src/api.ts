@@ -7,6 +7,7 @@ import type {
   Draft,
   ManuscriptChapter,
   ManuscriptOutline,
+  ManuscriptPreview,
   ManuscriptVolume,
   MemoryHit,
   PlotPlan,
@@ -238,6 +239,7 @@ export const api = {
       current: string
       plot_plan_id?: string
       selected_option_id?: string
+      chapter_id?: string
     },
   ) =>
     request<{ draft: Draft }>(`/projects/${projectId}/write`, {
@@ -258,15 +260,36 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ instruction }),
     }),
+  manuallyReviseDraft: (
+    draftId: string,
+    body: string,
+    note: string,
+    runChecks = false,
+  ) =>
+    request<{ draft: Draft }>(`/drafts/${draftId}/manual-revision`, {
+      method: 'POST',
+      body: JSON.stringify({ body, note, run_checks: runChecks }),
+    }),
   diffDrafts: (fromId: string, toId: string) =>
     request<{ unified_diff: string }>(`/drafts/${fromId}/diff/${toId}`),
   workflows: (projectId: string) =>
     request<Workflow[]>(`/projects/${projectId}/workflows`),
   workflow: (runId: string) => request<WorkflowDetail>(`/workflows/${runId}`),
-  startWorkflow: (projectId: string, goal: string, current: string) =>
+  startWorkflow: (
+    projectId: string,
+    goal: string,
+    current: string,
+    chapterId?: string,
+    researchTopic?: string,
+  ) =>
     request<WorkflowDetail>(`/projects/${projectId}/workflows`, {
       method: 'POST',
-      body: JSON.stringify({ goal, current }),
+      body: JSON.stringify({
+        goal,
+        current,
+        chapter_id: chapterId,
+        research_topic: researchTopic || undefined,
+      }),
     }),
   approveWorkflow: (runId: string, step: string, selectedOptionId?: string) =>
     request<WorkflowDetail>(`/workflows/${runId}/steps/${step}/approval`, {
@@ -282,6 +305,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ decision: 'reject', actor: 'author', note }),
     }),
+  retryWorkflow: (runId: string, fromStep?: string) =>
+    request<WorkflowDetail>(`/workflows/${runId}/retry`, {
+      method: 'POST',
+      body: JSON.stringify({ from_step: fromStep }),
+    }),
+  cancelWorkflow: (runId: string) =>
+    request<WorkflowDetail>(`/workflows/${runId}/cancel`, { method: 'POST' }),
   memory: (projectId: string, query: string) =>
     request<{ revision: number; hits: MemoryHit[]; conflicts: unknown[] }>(
       `/projects/${projectId}/memory/query`,
@@ -302,7 +332,12 @@ export const api = {
     }
     return response.blob()
   },
-  downloadManuscript: async (projectId: string, format: 'markdown' | 'zip') => {
+  manuscriptPreview: (projectId: string) =>
+    request<ManuscriptPreview>(`/projects/${projectId}/export/preview`),
+  downloadManuscript: async (
+    projectId: string,
+    format: 'markdown' | 'docx' | 'zip',
+  ) => {
     const response = await fetch(`${API_URL}/projects/${projectId}/export?format=${format}`, {
       headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
     })

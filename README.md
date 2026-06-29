@@ -29,10 +29,12 @@ Story Bible、剧情规划、章节生成、连续性检查和事实检查组织
 - 提供 React Web 工作台以及 Agent 耗时、Token、成本和 Prompt 版本日志。
 - 按 Auth 用户隔离作品，支持作品新建、编辑、无损归档与恢复。
 - 提供账户级 Billing 中心，展示余额、Token 用量、月度账单和充值记录。
-- 按卷和章节组织已审阅内容，并导出 Markdown 或 ZIP 交付稿。
+- 按卷和章节组织已审阅内容，并导出 Markdown、DOCX 或 ZIP 交付稿。
+- 从章节直接启动生成工作流，自动维护当前草稿与已接受版本。
+- 支持正文手工修订、DOCX 导出、字数统计和工作流自动刷新。
 
-0.4.0 的本地个人创作闭环和验收标准见
-[`docs/roadmap-0.4.0.md`](docs/roadmap-0.4.0.md)。
+0.5.0 的章节中心写作台和验收标准见
+[`docs/roadmap-0.5.0.md`](docs/roadmap-0.5.0.md)。
 
 ## 架构
 
@@ -264,6 +266,7 @@ novel-harness bible add-character PROJECT_ID character.json
 novel-harness bible add-foreshadowing PROJECT_ID "残缺的铜符"
 novel-harness plan PROJECT_ID --current "主角抵达城外" --goal "进入长安"
 novel-harness write PROJECT_ID --goal "主角第一次进入长安"
+novel-harness write PROJECT_ID --chapter-id CHAPTER_ID --goal "主角第一次进入长安"
 novel-harness check PROJECT_ID chapter.md
 novel-harness draft accept DRAFT_ID
 novel-harness vector rebuild PROJECT_ID
@@ -306,6 +309,7 @@ novel-harness draft list PROJECT_ID
 novel-harness draft show DRAFT_ID
 novel-harness draft revise DRAFT_ID --instruction "减少巧合，强化主动选择"
 novel-harness draft diff OLD_DRAFT_ID NEW_DRAFT_ID
+novel-harness draft edit DRAFT_ID edited-chapter.md --note "作者手工调整节奏"
 novel-harness draft reject DRAFT_ID --reason "节奏不符合预期"
 ```
 

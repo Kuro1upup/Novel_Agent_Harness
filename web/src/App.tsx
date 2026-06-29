@@ -39,6 +39,7 @@ import type {
   Draft,
   ManuscriptChapter,
   ManuscriptOutline,
+  ManuscriptPreview,
   MemoryHit,
   PlotPlan,
   Project,
@@ -287,7 +288,12 @@ function Workspace({ user, onLogout }: { user: AuthUser; onLogout: () => void })
             <WorkflowWorkspace project={project} feedback={feedback} fail={fail} />
           )}
           {tab === 'manuscript' && project && (
-            <ManuscriptWorkspace project={project} feedback={feedback} fail={fail} />
+            <ManuscriptWorkspace
+              project={project}
+              feedback={feedback}
+              fail={fail}
+              onNavigate={setTab}
+            />
           )}
           {tab === 'drafts' && project && (
             <DraftWorkspace project={project} feedback={feedback} fail={fail} />
@@ -1064,7 +1070,7 @@ function WorkflowWorkspace({
     try {
       const items = await api.workflows(project.id)
       setWorkflows(items)
-      const selected = selectedId || items.find((item) => item.status === 'waiting_approval')?.id || items.at(-1)?.id
+      const selected = selectedId || items.find((item) => item.status === 'waiting_approval')?.id || items[0]?.id
       if (selected) setDetail(await api.workflow(selected))
     } catch (reason) { fail(reason) }
   }, [project.id, fail])
@@ -1072,10 +1078,20 @@ function WorkflowWorkspace({
   useEffect(() => {
     api.workflows(project.id).then(async (items) => {
       setWorkflows(items)
-      const selected = items.find((item) => item.status === 'waiting_approval')?.id || items.at(-1)?.id
+      const selected = items.find((item) => item.status === 'waiting_approval')?.id || items[0]?.id
       if (selected) setDetail(await api.workflow(selected))
     }).catch(fail)
   }, [project.id, fail])
+
+  useEffect(() => {
+    const runId = detail?.run.id
+    const runStatus = detail?.run.status
+    if (!runId || ['succeeded', 'failed', 'cancelled'].includes(runStatus || '')) return
+    const timer = window.setInterval(() => {
+      void refresh(runId)
+    }, 2000)
+    return () => window.clearInterval(timer)
+  }, [detail?.run.id, detail?.run.status, refresh])
 
   const approve = async () => {
     if (!detail?.run.current_step) return
@@ -1102,7 +1118,7 @@ function WorkflowWorkspace({
       <section className="two-column workflow-layout">
         <Panel title="工作流">
           <div className="workflow-list">
-            {workflows.slice().reverse().map((run) => (
+            {workflows.map((run) => (
               <button key={run.id} className={detail?.run.id === run.id ? 'active' : ''} onClick={() => api.workflow(run.id).then(setDetail).catch(fail)}>
                 <span className={`status ${run.status}`}>{statusLabels[run.status] || run.status}</span>
                 <strong>{String(run.parameters.goal || '章节工作流')}</strong>
@@ -1136,6 +1152,7 @@ function WorkflowWorkspace({
                   </div>
                 ))}
               </div>
+              {detail.run.error && <div className="workflow-error">{detail.run.error}</div>}
               {detail.run.status === 'waiting_approval' && detail.run.current_step && (
                 <div className="approval-box">
                   <div><strong>等待你的决定</strong><p>当前节点：{detail.run.current_step}</p></div>
@@ -1167,6 +1184,25 @@ function WorkflowWorkspace({
                   <button className="primary" onClick={() => void approve()}><Check size={16} />批准</button>
                 </div>
               )}
+              <div className="workflow-actions">
+                {detail.run.status === 'failed' && (
+                  <button className="secondary" onClick={async () => {
+                    try {
+                      setDetail(await api.retryWorkflow(detail.run.id))
+                      feedback('工作流已重新进入队列')
+                    } catch (reason) { fail(reason) }
+                  }}><RotateCcw size={15} />从失败步骤重试</button>
+                )}
+                {['queued', 'running', 'waiting_approval'].includes(detail.run.status) && (
+                  <button className="danger-ghost" onClick={async () => {
+                    if (!window.confirm('确认取消这个工作流？')) return
+                    try {
+                      setDetail(await api.cancelWorkflow(detail.run.id))
+                      feedback('工作流已取消')
+                    } catch (reason) { fail(reason) }
+                  }}><X size={15} />取消工作流</button>
+                )}
+              </div>
             </Panel>
           )}
         </div>
@@ -1179,26 +1215,41 @@ function ManuscriptWorkspace({
   project,
   feedback,
   fail,
+  onNavigate,
 }: {
   project: Project
   feedback: (message: string) => void
   fail: (reason: unknown) => void
+  onNavigate: (tab: Tab) => void
 }) {
   const [outline, setOutline] = useState<ManuscriptOutline>({ volumes: [], chapters: [] })
+  const [preview, setPreview] = useState<ManuscriptPreview>({
+    volume_count: 0,
+    chapter_count: 0,
+    exportable_chapter_count: 0,
+    total_characters: 0,
+    total_paragraphs: 0,
+  })
   const [drafts, setDrafts] = useState<Draft[]>([])
   const [title, setTitle] = useState('')
   const [volumeId, setVolumeId] = useState('')
   const [draftId, setDraftId] = useState('')
   const [busy, setBusy] = useState(false)
+  const [writingChapter, setWritingChapter] = useState<ManuscriptChapter>()
+  const [workflowGoal, setWorkflowGoal] = useState('')
+  const [workflowCurrent, setWorkflowCurrent] = useState('')
+  const [researchTopic, setResearchTopic] = useState('')
 
   const refresh = useCallback(async () => {
     try {
-      const [nextOutline, nextDrafts] = await Promise.all([
+      const [nextOutline, nextDrafts, nextPreview] = await Promise.all([
         api.manuscript(project.id),
         api.drafts(project.id),
+        api.manuscriptPreview(project.id),
       ])
       setOutline(nextOutline)
       setDrafts(nextDrafts)
+      setPreview(nextPreview)
       setVolumeId((current) => (
         nextOutline.volumes.some((item) => item.id === current)
           ? current
@@ -1275,25 +1326,27 @@ function ManuscriptWorkspace({
     }
   }
 
-  const download = async (format: 'markdown' | 'zip') => {
+  const download = async (format: 'markdown' | 'docx' | 'zip') => {
     try {
       const blob = await api.downloadManuscript(project.id, format)
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      link.download = `${project.name}.${format === 'zip' ? 'zip' : 'md'}`
+      link.download = `${project.name}.${format === 'markdown' ? 'md' : format}`
       link.click()
       URL.revokeObjectURL(url)
-      feedback(`已导出 ${format === 'zip' ? 'ZIP 交付包' : 'Markdown 稿件'}`)
+      feedback(`已导出 ${format === 'zip' ? 'ZIP 交付包' : format.toUpperCase() + ' 稿件'}`)
     } catch (reason) {
       fail(reason)
     }
   }
 
-  const linkedDraftIds = new Set(outline.chapters.map((item) => item.draft_id).filter(Boolean))
-  const exportable = outline.chapters.filter(
-    (item) => item.status === 'accepted' || item.status === 'completed',
-  ).length
+  const linkedDraftIds = new Set(
+    outline.chapters
+      .flatMap((item) => [item.draft_id, item.accepted_draft_id])
+      .filter(Boolean),
+  )
+  const exportable = preview.exportable_chapter_count
 
   return (
     <div className="page-stack">
@@ -1307,6 +1360,9 @@ function ManuscriptWorkspace({
           <button className="secondary" disabled={!exportable} onClick={() => void download('markdown')}>
             <Download size={16} />Markdown
           </button>
+          <button className="secondary" disabled={!exportable} onClick={() => void download('docx')}>
+            <Download size={16} />DOCX
+          </button>
           <button className="primary" disabled={!exportable} onClick={() => void download('zip')}>
             <Download size={16} />ZIP 交付包
           </button>
@@ -1314,11 +1370,53 @@ function ManuscriptWorkspace({
       </section>
 
       <section className="metric-grid manuscript-metrics">
-        <Metric label="卷数" value={String(outline.volumes.length)} note="按目录顺序导出" />
-        <Metric label="章节数" value={String(outline.chapters.length)} note="包含待创作章节" />
-        <Metric label="可导出" value={String(exportable)} note="已接受或已定稿" />
-        <Metric label="未编排草稿" value={String(drafts.filter((item) => !linkedDraftIds.has(item.id)).length)} note="可关联到章节" />
+        <Metric label="卷数" value={String(preview.volume_count)} note="按目录顺序导出" />
+        <Metric label="章节数" value={String(preview.chapter_count)} note="包含待创作章节" />
+        <Metric
+          label="可导出"
+          value={String(exportable)}
+          note={`${preview.chapter_count ? Math.round(exportable / preview.chapter_count * 100) : 0}% 章节完成率`}
+        />
+        <Metric label="正文字符" value={preview.total_characters.toLocaleString()} note={`${preview.total_paragraphs} 个段落`} />
       </section>
+
+      {writingChapter && (
+        <section className="chapter-workflow-card">
+          <header>
+            <div>
+              <span className="eyebrow">Chapter workflow</span>
+              <h3>创作《{writingChapter.title}》</h3>
+            </div>
+            <button className="icon-button" onClick={() => setWritingChapter(undefined)}><X size={17} /></button>
+          </header>
+          <div className="chapter-workflow-form">
+            <Field label="当前剧情" value={workflowCurrent} onChange={setWorkflowCurrent} placeholder="上一章停在哪里？" />
+            <Field label="本章目标" value={workflowGoal} onChange={setWorkflowGoal} placeholder="这一章必须完成什么？" />
+            <Field label="研究主题（可选）" value={researchTopic} onChange={setResearchTopic} placeholder="例如：西汉城门制度" />
+            <button className="primary" disabled={!workflowGoal.trim() || busy} onClick={async () => {
+              setBusy(true)
+              try {
+                await api.startWorkflow(
+                  project.id,
+                  workflowGoal.trim(),
+                  workflowCurrent.trim(),
+                  writingChapter.id,
+                  researchTopic.trim(),
+                )
+                feedback('章节工作流已进入队列')
+                setWorkflowGoal('')
+                setWorkflowCurrent('')
+                setResearchTopic('')
+                onNavigate('workflows')
+              } catch (reason) {
+                fail(reason)
+              } finally {
+                setBusy(false)
+              }
+            }}><Send size={16} />启动章节工作流</button>
+          </div>
+        </section>
+      )}
 
       <section className="manuscript-layout">
         <div className="outline-list">
@@ -1375,6 +1473,10 @@ function ManuscriptWorkspace({
                           ))}
                       </select>
                       <div className="order-buttons">
+                        <button title="创作此章" onClick={() => {
+                          setWritingChapter(chapter)
+                          setWorkflowGoal(chapter.summary)
+                        }}><Sparkles size={14} /></button>
                         {chapter.status === 'accepted' && (
                           <button title="标记定稿" onClick={async () => {
                             try {
@@ -1453,24 +1555,42 @@ function DraftWorkspace({
   const [instruction, setInstruction] = useState('')
   const [diff, setDiff] = useState('')
   const [busy, setBusy] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [manualBody, setManualBody] = useState('')
+  const [manualNote, setManualNote] = useState('作者手工编辑')
+  const [runChecks, setRunChecks] = useState(false)
 
   const refresh = useCallback(async (selectedId?: string) => {
     try {
       const items = await api.drafts(project.id)
       setDrafts(items)
       const id = selectedId || items[0]?.id
-      if (id) setDraft(await api.draft(id))
+      if (id) {
+        const selected = await api.draft(id)
+        setDraft(selected)
+        setManualBody(selected.body)
+      }
     } catch (reason) { fail(reason) }
   }, [project.id, fail])
   useEffect(() => {
     api.drafts(project.id).then(async (items) => {
       setDrafts(items)
-      if (items[0]?.id) setDraft(await api.draft(items[0].id))
+      if (items[0]?.id) {
+        const selected = await api.draft(items[0].id)
+        setDraft(selected)
+        setManualBody(selected.body)
+      }
     }).catch(fail)
   }, [project.id, fail])
 
   const select = async (id: string) => {
-    try { setDraft(await api.draft(id)); setDiff('') } catch (reason) { fail(reason) }
+    try {
+      const selected = await api.draft(id)
+      setDraft(selected)
+      setManualBody(selected.body)
+      setEditing(false)
+      setDiff('')
+    } catch (reason) { fail(reason) }
   }
   const revise = async () => {
     if (!draft || !instruction) return
@@ -1520,9 +1640,53 @@ function DraftWorkspace({
                     URL.revokeObjectURL(url)
                   } catch (reason) { fail(reason) }
                 }}><Download size={15} />下载</button>
+                <button className="secondary" onClick={() => {
+                  setManualBody(draft.body)
+                  setDiff('')
+                  setEditing(true)
+                }}><PenLine size={15} />手工编辑</button>
               </div>
             </div>
-            {diff ? <pre className="diff-view">{diff || '两个版本没有文本差异。'}</pre> : <article className="manuscript">{draft.body}</article>}
+            {diff ? (
+              <pre className="diff-view">{diff || '两个版本没有文本差异。'}</pre>
+            ) : editing ? (
+              <div className="manual-editor">
+                <textarea value={manualBody} onChange={(event) => setManualBody(event.target.value)} />
+                <div className="manual-editor-options">
+                  <Field label="版本说明" value={manualNote} onChange={setManualNote} placeholder="说明这次手工修改的重点" />
+                  <label className="check-field">
+                    <input type="checkbox" checked={runChecks} onChange={(event) => setRunChecks(event.target.checked)} />
+                    保存时运行连续性与事实检查
+                  </label>
+                </div>
+                <div className="button-row">
+                  <button className="secondary" onClick={() => {
+                    setEditing(false)
+                    setManualBody(draft.body)
+                  }}>取消编辑</button>
+                  <button className="primary" disabled={busy || !manualBody.trim() || manualBody === draft.body} onClick={async () => {
+                    setBusy(true)
+                    try {
+                      const result = await api.manuallyReviseDraft(
+                        draft.id,
+                        manualBody,
+                        manualNote,
+                        runChecks,
+                      )
+                      setEditing(false)
+                      feedback('手工修改已保存为新版本')
+                      await refresh(result.draft.id)
+                    } catch (reason) {
+                      fail(reason)
+                    } finally {
+                      setBusy(false)
+                    }
+                  }}><Check size={16} />保存为新版本</button>
+                </div>
+              </div>
+            ) : (
+              <article className="manuscript">{draft.body}</article>
+            )}
             <div className="draft-meta">
               <div><strong>创作说明</strong><p>{draft.creative_notes || '无'}</p></div>
               <div><strong>事实依据</strong><p>{draft.factual_basis_summary || '未引用外部事实'}</p></div>

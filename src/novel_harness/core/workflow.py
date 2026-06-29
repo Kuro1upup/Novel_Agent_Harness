@@ -137,6 +137,7 @@ class WorkflowWorker:
         project_id = run.project_id
         goal = str(run.parameters["goal"])
         current = str(run.parameters.get("current") or "")
+        chapter_id = str(run.parameters["chapter_id"]) if run.parameters.get("chapter_id") else None
 
         if step.name == "research":
             topic = str(run.parameters.get("research_topic") or goal)
@@ -202,10 +203,12 @@ class WorkflowWorker:
                     if run.parameters.get("selected_option_id")
                     else None
                 ),
+                chapter_id=chapter_id,
                 workflow_run_id=run.id,
             )
             return {
                 "draft_id": draft.id,
+                "chapter_id": chapter_id,
                 "object_key": draft.object_key,
                 "canon_patch_id": patch_id,
                 "continuity_issue_ids": [issue.id for issue in issues],

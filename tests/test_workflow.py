@@ -6,7 +6,12 @@ import pytest
 
 from novel_harness.core.workflow import WorkflowWorker
 from novel_harness.models import PlotOption, PlotPlan, utc_now
-from novel_harness.services import ProjectService, StoryBibleService, WorkflowService
+from novel_harness.services import (
+    ManuscriptService,
+    ProjectService,
+    StoryBibleService,
+    WorkflowService,
+)
 from novel_harness.storage import session_scope
 
 
@@ -175,6 +180,32 @@ def test_workflow_creation_is_idempotent_per_project(session) -> None:
     assert len(service.list_for_project(project.id)) == 1
 
 
+def test_chapter_reuses_its_active_workflow(session) -> None:
+    project = ProjectService(session).create(name="长安", genre="历史")
+    manuscript = ManuscriptService(session)
+    volume = manuscript.outline(project.id).volumes[0]
+    chapter = manuscript.create_chapter(
+        project.id,
+        volume_id=volume.id,
+        title="第一章 入城",
+    )
+    service = WorkflowService(session)
+
+    first = service.create_chapter_workflow(
+        project.id,
+        chapter_id=chapter.id,
+        goal="主角通过城门",
+    )
+    duplicate = service.create_chapter_workflow(
+        project.id,
+        chapter_id=chapter.id,
+        goal="重复点击不应新建",
+    )
+
+    assert duplicate.run.id == first.run.id
+    assert len(service.list_for_project(project.id)) == 1
+
+
 def test_expired_worker_lease_resumes_running_step(session) -> None:
     project = ProjectService(session).create(name="长安", genre="历史")
     service = WorkflowService(session)
@@ -244,12 +275,19 @@ def test_auto_approval_stops_when_research_has_no_verified_source(session) -> No
 async def test_auto_approved_worker_completes_chapter_workflow(runtime) -> None:
     with session_scope(runtime.session_factory) as session:
         project = ProjectService(session).create(name="长安", genre="历史")
+        volume = ManuscriptService(session).outline(project.id).volumes[0]
+        chapter = ManuscriptService(session).create_chapter(
+            project.id,
+            volume_id=volume.id,
+            title="第一章 入城",
+        )
         run_id = (
             WorkflowService(session)
             .create_chapter_workflow(
                 project.id,
                 goal="主角通过城门查验",
                 current="主角抵达城外",
+                chapter_id=chapter.id,
                 auto_approve=True,
             )
             .run.id
@@ -270,6 +308,7 @@ async def test_auto_approved_worker_completes_chapter_workflow(runtime) -> None:
     with session_scope(runtime.session_factory) as session:
         detail = WorkflowService(session).detail(run_id)
         bible = StoryBibleService(session).get(project.id)
+        linked_chapter = ManuscriptService(session).require_chapter(project.id, chapter.id)
 
     assert detail.run.status == "succeeded"
     assert set(detail.run.result) == {
@@ -281,6 +320,10 @@ async def test_auto_approved_worker_completes_chapter_workflow(runtime) -> None:
         "memory_extract",
     }
     assert detail.run.result["write"]["draft_id"]
+    assert detail.run.result["write"]["chapter_id"] == chapter.id
+    assert linked_chapter.draft_id == detail.run.result["write"]["draft_id"]
+    assert linked_chapter.accepted_draft_id == detail.run.result["write"]["draft_id"]
+    assert linked_chapter.status == "accepted"
     assert detail.run.result["canon_commit"]["bible_version"] == 2
     assert detail.run.result["memory_extract"]["memory_count"] >= 1
     assert bible.version == 2

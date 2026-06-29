@@ -32,12 +32,15 @@ from novel_harness.models import (
     ResearchNote,
     StoryBible,
     StyleProfile,
+    new_id,
+    utc_now,
 )
 from novel_harness.providers.embedding import EmbeddingProvider
 from novel_harness.providers.vectorstore import VectorRecord, VectorStore
 from novel_harness.storage.repositories import Repositories
 
 from .agent_run_service import AgentRunService
+from .manuscript_service import ManuscriptService
 from .story_bible_service import StoryBibleService
 
 
@@ -168,6 +171,7 @@ class GenerationService:
         current_summary: str = "",
         plot_plan: PlotPlan | None = None,
         selected_option_id: str | None = None,
+        chapter_id: str | None = None,
         workflow_run_id: str | None = None,
     ) -> tuple[
         GenerationResult,
@@ -177,6 +181,8 @@ class GenerationService:
         str,
     ]:
         self.repositories.projects.require(project_id)
+        if chapter_id is not None:
+            ManuscriptService(self.session).require_chapter(project_id, chapter_id)
         bible = StoryBibleService(self.session).get(project_id)
         styles = self.repositories.styles.list(project_id)
         style = styles[-1] if styles else StyleProfile(project_id=project_id)
@@ -215,7 +221,8 @@ class GenerationService:
             ),
             input_summary=(
                 f"goal_chars={len(scene_goal)};plan_id={plan.id};"
-                f"selected_option_id={plan.selected_option_id or ''}"
+                f"selected_option_id={plan.selected_option_id or ''};"
+                f"chapter_id={chapter_id or ''}"
             ),
             workflow_run_id=workflow_run_id,
         )
@@ -270,6 +277,7 @@ class GenerationService:
                 "context_sources": self._context_references(project_id, retrieval),
                 "plot_plan_id": plan.id,
                 "selected_option_id": plan.selected_option_id,
+                "chapter_id": chapter_id,
             }
         )
         sources = self._source_texts(project_id)
@@ -314,6 +322,8 @@ class GenerationService:
                     }
                 ],
             )
+            if chapter_id is not None:
+                ManuscriptService(self.session).attach_draft(chapter_id, stored.id)
         except Exception:
             self.object_store.remove(object_key)
             raise
@@ -398,6 +408,7 @@ class GenerationService:
         patch = self.repositories.canon_patches.get_by_draft(draft_id)
         if patch is not None and patch.status == "pending":
             StoryBibleService(self.session).reject_patch(patch.id, reason=reason)
+        ManuscriptService(self.session).reject_current_draft(draft_id)
         return rejected
 
     async def revise_draft(
@@ -413,6 +424,8 @@ class GenerationService:
         if original.status == "accepted":
             raise ValueError("accepted drafts are immutable")
         bible = StoryBibleService(self.session).get(original.project_id)
+        chapter = self.repositories.manuscript_chapters.get_by_draft(original.id)
+        chapter_id = original.chapter_id or (chapter.id if chapter is not None else None)
         issues = self.repositories.continuity_issues.list_for_draft(draft_id)
         risks = self.repositories.fact_risks.list_for_draft(draft_id)
         revised = await self._run_agent(
@@ -437,6 +450,7 @@ class GenerationService:
                 "object_key": None,
                 "plot_plan_id": original.plot_plan_id,
                 "selected_option_id": original.selected_option_id,
+                "chapter_id": chapter_id,
                 "parent_draft_id": original.id,
                 "revision_number": original.revision_number + 1,
                 "revision_instruction": instruction.strip(),
@@ -513,6 +527,102 @@ class GenerationService:
                     old_patch.id,
                     reason=f"superseded by revision {stored.id}",
                 )
+            if chapter_id is not None:
+                ManuscriptService(self.session).attach_draft(chapter_id, stored.id)
+        except Exception:
+            self.object_store.remove(object_key)
+            raise
+        return stored, continuity, fact_risks, originality, patch.id
+
+    async def manually_revise_draft(
+        self,
+        draft_id: str,
+        *,
+        body: str,
+        note: str = "作者手工编辑",
+        run_checks: bool = False,
+    ) -> tuple[GenerationResult, list[ContinuityIssue], list[FactRisk], OriginalityReport, str]:
+        if not body.strip():
+            raise ValueError("manual revision body is required")
+        original = self.get_draft(draft_id)
+        self.repositories.projects.require(original.project_id)
+        chapter = self.repositories.manuscript_chapters.get_by_draft(original.id)
+        chapter_id = original.chapter_id or (chapter.id if chapter is not None else None)
+        now = utc_now()
+        revised = original.model_copy(
+            update={
+                "id": new_id(),
+                "body": body.strip(),
+                "status": "draft",
+                "object_key": None,
+                "chapter_id": chapter_id,
+                "parent_draft_id": original.id,
+                "revision_number": original.revision_number + 1,
+                "revision_instruction": note.strip() or "作者手工编辑",
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        continuity: list[ContinuityIssue] = []
+        fact_risks: list[FactRisk] = []
+        if run_checks:
+            continuity, fact_risks = await self.check(
+                original.project_id,
+                revised.body,
+            )
+        originality = check_originality(
+            revised.body[:50_000],
+            self._source_texts(original.project_id),
+            max_contiguous_chars=self.max_contiguous,
+            max_ngram_overlap=self.max_ngram_overlap,
+        )
+        if not originality.passed:
+            raise OriginalityError(
+                "manual revision overlaps an ingested source beyond the configured threshold"
+            )
+        digest = hashlib.sha256(revised.body.encode()).hexdigest()
+        object_key = f"projects/{original.project_id}/drafts/{revised.id}/{digest}.md"
+        self.object_store.put_bytes(
+            object_key,
+            revised.body.encode("utf-8"),
+            content_type="text/markdown; charset=utf-8",
+        )
+        stored = revised.model_copy(update={"object_key": object_key})
+        try:
+            self.repositories.generations.add(stored)
+            for issue in continuity:
+                self.repositories.continuity_issues.add(
+                    issue.model_copy(update={"draft_id": stored.id})
+                )
+            for risk in fact_risks:
+                self.repositories.fact_risks.add(risk.model_copy(update={"draft_id": stored.id}))
+            patch = StoryBibleService(self.session).create_patch(
+                original.project_id,
+                stored.id,
+                [
+                    {
+                        "op": "add_canon_event",
+                        "value": {
+                            "draft_id": stored.id,
+                            "summary": note.strip() or "作者手工编辑",
+                            "status": "accepted_manual_revision",
+                            "parent_draft_id": original.id,
+                        },
+                    }
+                ],
+            )
+            if original.status == "draft":
+                self.repositories.generations.update(
+                    original.model_copy(update={"status": "superseded"})
+                )
+                old_patch = self.repositories.canon_patches.get_by_draft(original.id)
+                if old_patch is not None and old_patch.status == "pending":
+                    StoryBibleService(self.session).reject_patch(
+                        old_patch.id,
+                        reason=f"superseded by manual revision {stored.id}",
+                    )
+            if chapter_id is not None:
+                ManuscriptService(self.session).attach_draft(chapter_id, stored.id)
         except Exception:
             self.object_store.remove(object_key)
             raise

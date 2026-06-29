@@ -454,6 +454,7 @@ class GenerationRepository(JsonRepository[GenerationResult]):
             "bible_version": model.bible_version,
             "plot_plan_id": model.plot_plan_id,
             "selected_option_id": model.selected_option_id,
+            "chapter_id": model.chapter_id,
             "parent_draft_id": model.parent_draft_id,
             "revision_number": model.revision_number,
         }
@@ -472,6 +473,28 @@ class GenerationRepository(JsonRepository[GenerationResult]):
         statement = (
             statement.order_by(GenerationResultORM.created_at.desc()).offset(offset).limit(limit)
         )
+        return [
+            GenerationResult.model_validate(record.payload)
+            for record in self.session.scalars(statement)
+        ]
+
+    def list_for_chapter(
+        self,
+        project_id: str,
+        chapter_id: str,
+    ) -> list[GenerationResult]:
+        statement = (
+            select(GenerationResultORM)
+            .where(
+                GenerationResultORM.project_id == project_id,
+                GenerationResultORM.chapter_id == chapter_id,
+            )
+            .order_by(
+                GenerationResultORM.revision_number.desc(),
+                GenerationResultORM.created_at.desc(),
+            )
+        )
+        statement = self._scope_to_owner(statement)
         return [
             GenerationResult.model_validate(record.payload)
             for record in self.session.scalars(statement)
@@ -528,6 +551,7 @@ class ManuscriptChapterRepository(JsonRepository[ManuscriptChapter]):
             "position": model.position,
             "status": model.status,
             "draft_id": model.draft_id,
+            "accepted_draft_id": model.accepted_draft_id,
         }
 
     def list_ordered(
@@ -562,7 +586,12 @@ class ManuscriptChapterRepository(JsonRepository[ManuscriptChapter]):
         return int(value or 0) + 1
 
     def get_by_draft(self, draft_id: str) -> ManuscriptChapter | None:
-        statement = select(ManuscriptChapterORM).where(ManuscriptChapterORM.draft_id == draft_id)
+        statement = select(ManuscriptChapterORM).where(
+            or_(
+                ManuscriptChapterORM.draft_id == draft_id,
+                ManuscriptChapterORM.accepted_draft_id == draft_id,
+            )
+        )
         statement = self._scope_to_owner(statement)
         record = self.session.scalar(statement)
         return ManuscriptChapter.model_validate(record.payload) if record else None

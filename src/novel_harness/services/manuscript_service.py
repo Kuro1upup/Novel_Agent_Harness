@@ -8,9 +8,15 @@ import re
 import zipfile
 from typing import Any
 
+from docx import Document
 from sqlalchemy.orm import Session
 
-from novel_harness.models import ManuscriptChapter, ManuscriptOutline, ManuscriptVolume
+from novel_harness.models import (
+    ManuscriptChapter,
+    ManuscriptOutline,
+    ManuscriptPreview,
+    ManuscriptVolume,
+)
 from novel_harness.storage.repositories import Repositories
 
 
@@ -125,7 +131,8 @@ class ManuscriptService:
         self._ensure_draft_available(draft_id)
         draft_status = self._draft_status(draft_id, project_id)
         chapter_status = status or self._status_for_draft(draft_status)
-        self._validate_chapter_status(chapter_status, draft_status)
+        accepted_draft_id = draft_id if draft_status == "accepted" else None
+        self._validate_chapter_status(chapter_status, accepted_draft_id)
         chapter = ManuscriptChapter(
             project_id=project_id,
             volume_id=volume.id,
@@ -134,6 +141,7 @@ class ManuscriptService:
             position=position
             or self.repositories.manuscript_chapters.next_position(project_id, volume.id),
             draft_id=draft_id,
+            accepted_draft_id=accepted_draft_id,
             status=chapter_status,
         )
         return self.repositories.manuscript_chapters.add(chapter)
@@ -148,13 +156,58 @@ class ManuscriptService:
         draft_id = changes["draft_id"] if "draft_id" in changes else chapter.draft_id
         self._ensure_draft_available(draft_id, chapter_id=chapter.id)
         draft_status = self._draft_status(draft_id, chapter.project_id)
+        accepted_draft_id = chapter.accepted_draft_id
+        if draft_status == "accepted":
+            accepted_draft_id = draft_id
         if "draft_id" in changes and "status" not in changes:
             changes["status"] = self._status_for_draft(draft_status)
         chapter_status = str(changes.get("status") or chapter.status)
-        self._validate_chapter_status(chapter_status, draft_status)
-        values = {**chapter.model_dump(), **changes, "volume_id": volume_id}
+        self._validate_chapter_status(chapter_status, accepted_draft_id)
+        values = {
+            **chapter.model_dump(),
+            **changes,
+            "volume_id": volume_id,
+            "accepted_draft_id": accepted_draft_id,
+        }
         return self.repositories.manuscript_chapters.update(
             ManuscriptChapter.model_validate(values)
+        )
+
+    def require_chapter(self, project_id: str, chapter_id: str) -> ManuscriptChapter:
+        self.repositories.projects.require(project_id)
+        chapter = self.repositories.manuscript_chapters.require(chapter_id)
+        if chapter.project_id != project_id:
+            raise ValueError("章节不属于当前作品")
+        self._require_active_volume(chapter.volume_id, project_id)
+        return chapter
+
+    def attach_draft(self, chapter_id: str, draft_id: str) -> ManuscriptChapter:
+        chapter = self.repositories.manuscript_chapters.require(chapter_id)
+        draft_status = self._draft_status(draft_id, chapter.project_id)
+        self._ensure_draft_available(draft_id, chapter_id=chapter.id)
+        accepted_draft_id = draft_id if draft_status == "accepted" else chapter.accepted_draft_id
+        return self.repositories.manuscript_chapters.update(
+            chapter.model_copy(
+                update={
+                    "draft_id": draft_id,
+                    "accepted_draft_id": accepted_draft_id,
+                    "status": self._status_for_draft(draft_status),
+                }
+            )
+        )
+
+    def reject_current_draft(self, draft_id: str) -> ManuscriptChapter | None:
+        chapter = self.repositories.manuscript_chapters.get_by_draft(draft_id)
+        if chapter is None or chapter.draft_id != draft_id:
+            return chapter
+        fallback = chapter.accepted_draft_id
+        return self.repositories.manuscript_chapters.update(
+            chapter.model_copy(
+                update={
+                    "draft_id": fallback,
+                    "status": "accepted" if fallback else "planned",
+                }
+            )
         )
 
     def reorder_chapters(
@@ -191,9 +244,7 @@ class ManuscriptService:
             volume_chapters = [
                 chapter
                 for chapter in outline.chapters
-                if chapter.volume_id == volume.id
-                and chapter.status in {"accepted", "completed"}
-                and chapter.draft_id
+                if chapter.volume_id == volume.id and self._export_draft_id(chapter)
             ]
             if not volume_chapters:
                 continue
@@ -230,11 +281,7 @@ class ManuscriptService:
             )
             volume_numbers = {volume.id: index for index, volume in enumerate(outline.volumes, 1)}
             for chapter in outline.chapters:
-                if (
-                    chapter.status not in {"accepted", "completed"}
-                    or not chapter.draft_id
-                    or chapter.volume_id not in volume_numbers
-                ):
+                if not self._export_draft_id(chapter) or chapter.volume_id not in volume_numbers:
                     continue
                 body = self._accepted_body(chapter, object_store)
                 volume_number = volume_numbers[chapter.volume_id]
@@ -244,6 +291,57 @@ class ManuscriptService:
                 )
                 archive.writestr(path, f"# {chapter.title}\n\n{body.strip()}\n")
         return buffer.getvalue(), count
+
+    def export_docx(self, project_id: str, object_store: Any) -> tuple[bytes, int]:
+        project = self.repositories.projects.require(project_id)
+        outline = self.outline(project_id)
+        document = Document()
+        document.add_heading(project.name, level=0)
+        if project.premise:
+            document.add_paragraph(project.premise.strip())
+        count = 0
+        for volume in outline.volumes:
+            chapters = [
+                chapter
+                for chapter in outline.chapters
+                if chapter.volume_id == volume.id and self._export_draft_id(chapter)
+            ]
+            if not chapters:
+                continue
+            document.add_heading(volume.title, level=1)
+            if volume.description:
+                document.add_paragraph(volume.description.strip())
+            for chapter in chapters:
+                document.add_heading(chapter.title, level=2)
+                body = self._accepted_body(chapter, object_store)
+                for paragraph in self._paragraphs(body):
+                    document.add_paragraph(paragraph)
+                count += 1
+        if count == 0:
+            raise ValueError("作品中还没有可导出的已接受章节")
+        buffer = io.BytesIO()
+        document.save(buffer)
+        return buffer.getvalue(), count
+
+    def preview(self, project_id: str, object_store: Any) -> ManuscriptPreview:
+        outline = self.outline(project_id)
+        total_characters = 0
+        total_paragraphs = 0
+        exportable = 0
+        for chapter in outline.chapters:
+            if not self._export_draft_id(chapter):
+                continue
+            body = self._accepted_body(chapter, object_store)
+            total_characters += len("".join(body.split()))
+            total_paragraphs += len(self._paragraphs(body))
+            exportable += 1
+        return ManuscriptPreview(
+            volume_count=len(outline.volumes),
+            chapter_count=len(outline.chapters),
+            exportable_chapter_count=exportable,
+            total_characters=total_characters,
+            total_paragraphs=total_paragraphs,
+        )
 
     def _require_active_volume(self, volume_id: str, project_id: str) -> ManuscriptVolume:
         volume = self.repositories.manuscript_volumes.require(volume_id)
@@ -274,7 +372,10 @@ class ManuscriptService:
             raise ValueError("该草稿已经关联到其他章节")
 
     def _accepted_body(self, chapter: ManuscriptChapter, object_store: Any) -> str:
-        draft = self.repositories.generations.require(str(chapter.draft_id))
+        draft_id = self._export_draft_id(chapter)
+        if draft_id is None:
+            raise ValueError(f"章节《{chapter.title}》没有已接受版本")
+        draft = self.repositories.generations.require(draft_id)
         if draft.status != "accepted":
             raise ValueError(f"章节《{chapter.title}》关联的草稿尚未接受")
         if not draft.object_key:
@@ -288,8 +389,8 @@ class ManuscriptService:
         return "accepted" if draft_status == "accepted" else "drafting"
 
     @staticmethod
-    def _validate_chapter_status(status: str, draft_status: str | None) -> None:
-        if status in {"accepted", "completed"} and draft_status != "accepted":
+    def _validate_chapter_status(status: str, accepted_draft_id: str | None) -> None:
+        if status in {"accepted", "completed"} and accepted_draft_id is None:
             raise ValueError("章节标记为已接受或已完成前，必须关联已接受草稿")
 
     @staticmethod
@@ -307,3 +408,15 @@ class ManuscriptService:
     def _safe_name(value: str) -> str:
         name = re.sub(r'[<>:"/\\|?*\\x00-\\x1f]', "-", value).strip(" .")
         return name[:80] or "chapter"
+
+    @staticmethod
+    def _export_draft_id(chapter: ManuscriptChapter) -> str | None:
+        if chapter.accepted_draft_id:
+            return chapter.accepted_draft_id
+        if chapter.status in {"accepted", "completed"}:
+            return chapter.draft_id
+        return None
+
+    @staticmethod
+    def _paragraphs(body: str) -> list[str]:
+        return [item.strip() for item in re.split(r"\n\s*\n", body) if item.strip()]

@@ -105,6 +105,7 @@ export interface ManuscriptChapter {
   position: number
   status: 'planned' | 'drafting' | 'accepted' | 'completed'
   draft_id?: string | null
+  accepted_draft_id?: string | null
   created_at: string
   updated_at: string
 }
@@ -112,6 +113,14 @@ export interface ManuscriptChapter {
 export interface ManuscriptOutline {
   volumes: ManuscriptVolume[]
   chapters: ManuscriptChapter[]
+}
+
+export interface ManuscriptPreview {
+  volume_count: number
+  chapter_count: number
+  exportable_chapter_count: number
+  total_characters: number
+  total_paragraphs: number
 }
 
 export interface Character {
@@ -179,6 +188,7 @@ export interface Draft {
   bible_version: number
   plot_plan_id?: string
   selected_option_id?: string
+  chapter_id?: string
   parent_draft_id?: string
   revision_number: number
   revision_instruction: string
@@ -199,6 +209,8 @@ export interface Workflow {
   current_step?: string
   parameters: Record<string, unknown>
   result: Record<string, unknown>
+  error?: string
+  cancel_requested?: boolean
   created_at: string
 }
 

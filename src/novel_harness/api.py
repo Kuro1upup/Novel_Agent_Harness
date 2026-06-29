@@ -47,8 +47,10 @@ from novel_harness.models import (
     ForeshadowingProposalResponse,
     ForeshadowingResolveRequest,
     GenerationResult,
+    ManualDraftRevisionRequest,
     ManuscriptChapter,
     ManuscriptOutline,
+    ManuscriptPreview,
     ManuscriptReorderRequest,
     ManuscriptVolume,
     MemoryInvalidateRequest,
@@ -146,7 +148,7 @@ def create_app(
 
     app = FastAPI(
         title="Novel Agent Harness",
-        version="0.4.0",
+        version="0.5.0",
         description="Provider-neutral long-form fiction writing agent harness.",
         lifespan=lifespan,
     )
@@ -394,7 +396,7 @@ def create_app(
         project_id: str,
         rt: RuntimeDep,
         session: SessionDep,
-        format: Literal["markdown", "zip"] = "markdown",
+        format: Literal["markdown", "docx", "zip"] = "markdown",
     ) -> Response:
         service = ManuscriptService(session)
         if format == "zip":
@@ -404,12 +406,32 @@ def create_app(
                 media_type="application/zip",
                 headers={"Content-Disposition": 'attachment; filename="manuscript.zip"'},
             )
+        if format == "docx":
+            docx_content, _ = service.export_docx(project_id, rt.object_store)
+            return Response(
+                content=docx_content,
+                media_type=(
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                ),
+                headers={"Content-Disposition": 'attachment; filename="manuscript.docx"'},
+            )
         markdown_content, _ = service.export_markdown(project_id, rt.object_store)
         return Response(
             content=markdown_content,
             media_type="text/markdown; charset=utf-8",
             headers={"Content-Disposition": 'attachment; filename="manuscript.md"'},
         )
+
+    @app.get(
+        "/projects/{project_id}/export/preview",
+        response_model=ManuscriptPreview,
+    )
+    async def preview_manuscript(
+        project_id: str,
+        rt: RuntimeDep,
+        session: SessionDep,
+    ) -> ManuscriptPreview:
+        return ManuscriptService(session).preview(project_id, rt.object_store)
 
     @app.post("/projects/{project_id}/style/analyze", response_model=StyleProfile)
     async def analyze_style(
@@ -633,6 +655,7 @@ def create_app(
             current_summary=payload.current,
             plot_plan=plot_plan,
             selected_option_id=payload.selected_option_id,
+            chapter_id=payload.chapter_id,
         )
         return WriteResponse(
             draft=draft,
@@ -721,6 +744,27 @@ def create_app(
         ).revise_draft(
             draft_id,
             instruction=payload.instruction,
+        )
+        return WriteResponse(
+            draft=draft,
+            continuity_issues=issues,
+            fact_risks=risks,
+            originality=asdict(originality),
+            canon_patch_id=patch_id,
+        )
+
+    @app.post("/drafts/{draft_id}/manual-revision", response_model=WriteResponse)
+    async def manually_revise_draft(
+        draft_id: str,
+        payload: ManualDraftRevisionRequest,
+        session: SessionDep,
+        rt: RuntimeDep,
+    ) -> WriteResponse:
+        draft, issues, risks, originality, patch_id = await rt.generation_service(
+            session
+        ).manually_revise_draft(
+            draft_id,
+            **payload.model_dump(),
         )
         return WriteResponse(
             draft=draft,

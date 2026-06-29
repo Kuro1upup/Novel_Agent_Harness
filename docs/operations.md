@@ -18,8 +18,9 @@ novel-harness worker
 发布检查必须确认 Auth/Billing 的 `JWT_SECRET` 一致，且三个服务的
 `BILLING_INTERNAL_API_KEY` 一致。`/health/ready` 会把 Auth 和 Billing 纳入必需依赖。
 
-升级到 0.4.0 后执行 `novel-harness db migrate`，迁移会增加卷章目录。归档是无损
-操作，不删除对象、向量或关联关系；归档项目上的新工作流和生成请求会被拒绝。
+升级到 0.5.0 后执行 `novel-harness db migrate`，迁移会连接章节、当前草稿与已接受
+版本。归档是无损操作，不删除对象、向量或关联关系；归档项目上的新工作流和生成请求
+会被拒绝。
 
 本地整套服务可使用 `make local-up` 启动、`make local-down` 停止，使用
 `make local-status` 查看状态。

@@ -280,9 +280,14 @@ class StoryBibleService:
         if draft is not None:
             self.repositories.generations.update(draft.model_copy(update={"status": "accepted"}))
             chapter = self.repositories.manuscript_chapters.get_by_draft(draft.id)
-            if chapter is not None and chapter.status == "drafting":
+            if chapter is not None and chapter.draft_id == draft.id:
                 self.repositories.manuscript_chapters.update(
-                    chapter.model_copy(update={"status": "accepted"})
+                    chapter.model_copy(
+                        update={
+                            "accepted_draft_id": draft.id,
+                            "status": "accepted",
+                        }
+                    )
                 )
         return updated
 

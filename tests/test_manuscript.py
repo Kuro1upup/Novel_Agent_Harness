@@ -6,6 +6,7 @@ import zipfile
 
 import httpx
 import pytest
+from docx import Document
 
 from novel_harness.api import create_app
 
@@ -64,6 +65,7 @@ async def test_manuscript_outline_reorder_and_export(runtime) -> None:
             if item["id"] == accepted_chapter.json()["id"]
         )
         assert linked["status"] == "accepted"
+        assert linked["accepted_draft_id"] == accepted_draft["id"]
 
         duplicate = await client.post(
             f"/projects/{project_id}/chapters",
@@ -129,6 +131,104 @@ async def test_manuscript_outline_reorder_and_export(runtime) -> None:
         )
         assert completed.status_code == 200
         assert completed.json()["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_chapter_driven_writing_manual_revision_and_docx_export(runtime) -> None:
+    transport = httpx.ASGITransport(app=create_app(runtime=runtime))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        project_id = (
+            await client.post(
+                "/projects",
+                json={"name": "长安手稿", "genre": "历史"},
+            )
+        ).json()["id"]
+        volume = (await client.get(f"/projects/{project_id}/manuscript")).json()["volumes"][0]
+        chapter = (
+            await client.post(
+                f"/projects/{project_id}/chapters",
+                json={
+                    "volume_id": volume["id"],
+                    "title": "第一章 城门",
+                    "summary": "主角通过城门",
+                },
+            )
+        ).json()
+
+        written = await client.post(
+            f"/projects/{project_id}/write",
+            json={
+                "goal": "主角通过城门",
+                "current": "主角抵达城外",
+                "chapter_id": chapter["id"],
+            },
+        )
+        assert written.status_code == 200, written.text
+        first = written.json()["draft"]
+        assert first["chapter_id"] == chapter["id"]
+
+        outline = (await client.get(f"/projects/{project_id}/manuscript")).json()
+        linked = outline["chapters"][0]
+        assert linked["draft_id"] == first["id"]
+        assert linked["accepted_draft_id"] is None
+        assert linked["status"] == "drafting"
+
+        assert (await client.post(f"/drafts/{first['id']}/accept")).status_code == 200
+        linked = (await client.get(f"/projects/{project_id}/manuscript")).json()["chapters"][0]
+        assert linked["accepted_draft_id"] == first["id"]
+        assert linked["status"] == "accepted"
+
+        manual_body = "作者手工改写后的第一段。\n\n这是第二段。"
+        manual = await client.post(
+            f"/drafts/{first['id']}/manual-revision",
+            json={
+                "body": manual_body,
+                "note": "调整叙述节奏",
+                "run_checks": False,
+            },
+        )
+        assert manual.status_code == 200, manual.text
+        second = manual.json()["draft"]
+        assert second["parent_draft_id"] == first["id"]
+        assert second["chapter_id"] == chapter["id"]
+        assert second["revision_number"] == 2
+
+        linked = (await client.get(f"/projects/{project_id}/manuscript")).json()["chapters"][0]
+        assert linked["draft_id"] == second["id"]
+        assert linked["accepted_draft_id"] == first["id"]
+        assert linked["status"] == "drafting"
+        old_export = await client.get(f"/projects/{project_id}/export")
+        assert manual_body not in old_export.text
+
+        assert (await client.post(f"/drafts/{second['id']}/accept")).status_code == 200
+        preview = await client.get(f"/projects/{project_id}/export/preview")
+        assert preview.status_code == 200
+        assert preview.json()["exportable_chapter_count"] == 1
+        assert preview.json()["total_characters"] == len("作者手工改写后的第一段。这是第二段。")
+        assert preview.json()["total_paragraphs"] == 2
+
+        docx = await client.get(f"/projects/{project_id}/export?format=docx")
+        assert docx.status_code == 200
+        document = Document(io.BytesIO(docx.content))
+        text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+        assert "第一章 城门" in text
+        assert "作者手工改写后的第一段。" in text
+
+        third = (
+            await client.post(
+                f"/drafts/{second['id']}/manual-revision",
+                json={"body": "这一版最终被作者放弃。", "note": "尝试另一种写法"},
+            )
+        ).json()["draft"]
+        rejected = await client.post(
+            f"/drafts/{third['id']}/reject",
+            json={"reason": "保留上一版"},
+        )
+        assert rejected.status_code == 200
+        linked = (await client.get(f"/projects/{project_id}/manuscript")).json()["chapters"][0]
+        assert linked["draft_id"] == second["id"]
+        assert linked["accepted_draft_id"] == second["id"]
+        assert linked["status"] == "accepted"
 
 
 @pytest.mark.asyncio

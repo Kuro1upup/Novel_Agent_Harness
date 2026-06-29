@@ -75,6 +75,14 @@ class ManuscriptReorderRequest(DomainModel):
     ordered_ids: list[str] = Field(min_length=1)
 
 
+class ManuscriptPreview(DomainModel):
+    volume_count: int = Field(ge=0)
+    chapter_count: int = Field(ge=0)
+    exportable_chapter_count: int = Field(ge=0)
+    total_characters: int = Field(ge=0)
+    total_paragraphs: int = Field(ge=0)
+
+
 class ResearchRequest(DomainModel):
     topic: str = Field(min_length=1)
     historical_context: str = ""
@@ -91,6 +99,7 @@ class WriteRequest(DomainModel):
     current: str = ""
     plot_plan_id: str | None = None
     selected_option_id: str | None = None
+    chapter_id: str | None = None
 
 
 class CheckRequest(DomainModel):
@@ -119,6 +128,7 @@ class WorkflowCreateRequest(DomainModel):
     goal: str = Field(min_length=1)
     current: str = ""
     research_topic: str | None = None
+    chapter_id: str | None = None
     auto_approve: bool = False
     max_attempts: int = Field(default=3, ge=1, le=20)
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
@@ -225,6 +235,12 @@ class PlotSelectionRequest(DomainModel):
 
 class DraftRevisionRequest(DomainModel):
     instruction: str = Field(min_length=1, max_length=10_000)
+
+
+class ManualDraftRevisionRequest(DomainModel):
+    body: str = Field(min_length=1, max_length=2_000_000)
+    note: str = Field(default="作者手工编辑", max_length=2000)
+    run_checks: bool = False
 
 
 class DraftRejectRequest(DomainModel):
