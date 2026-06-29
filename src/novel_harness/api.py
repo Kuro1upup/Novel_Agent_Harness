@@ -187,6 +187,8 @@ def create_app(
             user = AuthenticatedUser(id=1, nickname="Development User")
 
         request.state.current_user = user
+        if not runtime.settings.auth_required:
+            return await call_next(request)
         context_token = bind_user(user.id)
         try:
             return await call_next(request)

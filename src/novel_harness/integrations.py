@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -140,6 +141,8 @@ class AuthServiceClient(ServiceClient):
         nickname: str,
         reset_password: bool = False,
     ) -> LocalAccountBootstrapResult:
+        if not self.internal_api_key.strip():
+            raise AuthenticationError("未配置 AUTH_INTERNAL_API_KEY，无法初始化本地账号")
         try:
             response = await self.request(
                 "POST",
@@ -216,28 +219,44 @@ class BillingServiceClient(ServiceClient):
     async def record_usage(
         self,
         *,
+        event_id: str,
         user_id: int,
         model: str,
         subsystem: str,
         input_tokens: int,
         output_tokens: int,
     ) -> None:
-        try:
-            response = await self.request(
-                "POST",
-                "/api/billing/internal/usage",
-                headers=self.internal_headers,
-                json={
-                    "user_id": user_id,
-                    "model": model or "unknown",
-                    "subsystem": subsystem,
-                    "input_tokens": max(input_tokens, 0),
-                    "cache_hit_tokens": 0,
-                    "cache_miss_tokens": max(input_tokens, 0),
-                    "output_tokens": max(output_tokens, 0),
-                },
-            )
-        except ConnectionError as exc:
-            raise BillingUnavailableError("计费用量上报失败") from exc
-        if response.status_code != 200:
-            raise BillingUnavailableError(f"计费用量上报失败（HTTP {response.status_code}）")
+        payload = {
+            "event_id": event_id,
+            "user_id": user_id,
+            "model": model or "unknown",
+            "subsystem": subsystem,
+            "input_tokens": max(input_tokens, 0),
+            "cache_hit_tokens": 0,
+            "cache_miss_tokens": max(input_tokens, 0),
+            "output_tokens": max(output_tokens, 0),
+        }
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = await self.request(
+                    "POST",
+                    "/api/billing/internal/usage",
+                    headers=self.internal_headers,
+                    json=payload,
+                )
+            except ConnectionError as exc:
+                last_error = exc
+            else:
+                if response.status_code == 200:
+                    return
+                if response.status_code < 500:
+                    raise BillingUnavailableError(
+                        f"计费用量上报失败（HTTP {response.status_code}）"
+                    )
+                last_error = BillingUnavailableError(
+                    f"计费用量上报失败（HTTP {response.status_code}）"
+                )
+            if attempt < 2:
+                await asyncio.sleep(0.2 * (attempt + 1))
+        raise BillingUnavailableError("计费用量上报失败") from last_error

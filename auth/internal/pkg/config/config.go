@@ -19,7 +19,8 @@ type Config struct {
 	MinIOSecretKey           string
 	MinIOBucket              string
 	BillingServiceURL        string
-	InternalAPIKey           string
+	AuthInternalAPIKey       string
+	BillingInternalAPIKey    string
 	PhoneRegistrationEnabled bool
 	LocalBootstrapEnabled    bool
 
@@ -53,7 +54,11 @@ func Load() *Config {
 		MinIOSecretKey:    getEnv("MINIO_SECRET_KEY", "minioadmin"),
 		MinIOBucket:       getEnv("MINIO_BUCKET", "novel-auth"),
 		BillingServiceURL: getEnv("BILLING_SERVICE_URL", "http://billing:8002"),
-		InternalAPIKey: getEnv(
+		AuthInternalAPIKey: getEnv(
+			"AUTH_INTERNAL_API_KEY",
+			getEnv("BILLING_INTERNAL_API_KEY", getEnv("INTERNAL_API_KEY", "internal-key-change-me")),
+		),
+		BillingInternalAPIKey: getEnv(
 			"BILLING_INTERNAL_API_KEY",
 			getEnv("INTERNAL_API_KEY", "internal-key-change-me"),
 		),

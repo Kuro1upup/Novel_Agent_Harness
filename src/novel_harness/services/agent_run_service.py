@@ -114,6 +114,7 @@ class AgentRunService:
         ):
             try:
                 await self.billing_client.record_usage(
+                    event_id=f"agent-run:{run.trace_id}",
                     user_id=project.owner_user_id,
                     model=succeeded.model,
                     subsystem="novel_harness",

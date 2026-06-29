@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -37,6 +38,17 @@ type RechargeRequest struct {
 
 type InitBalanceRequest struct {
 	UserID int64 `json:"user_id" binding:"required"`
+}
+
+type RecordUsageRequest struct {
+	EventID         string `json:"event_id"`
+	UserID          int64  `json:"user_id" binding:"required"`
+	Model           string `json:"model" binding:"required"`
+	Subsystem       string `json:"subsystem" binding:"required"`
+	InputTokens     int    `json:"input_tokens"`
+	CacheHitTokens  int    `json:"cache_hit_tokens"`
+	CacheMissTokens int    `json:"cache_miss_tokens"`
+	OutputTokens    int    `json:"output_tokens"`
 }
 
 // ── Response DTOs (float64 for frontend compatibility) ──
@@ -314,24 +326,20 @@ func (h *BillingHandler) ListRecharges(c *gin.Context) {
 
 // RecordUsageInternal handles POST /api/billing/internal/usage (HTTP alternative to Redis).
 func (h *BillingHandler) RecordUsageInternal(c *gin.Context) {
-	var req struct {
-		UserID          int64  `json:"user_id" binding:"required"`
-		Model           string `json:"model" binding:"required"`
-		Subsystem       string `json:"subsystem" binding:"required"`
-		InputTokens     int    `json:"input_tokens"`
-		CacheHitTokens  int    `json:"cache_hit_tokens"`
-		CacheMissTokens int    `json:"cache_miss_tokens"`
-		OutputTokens    int    `json:"output_tokens"`
-	}
+	var req RecordUsageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "参数错误"})
 		return
 	}
 
-	id, err := h.svc.RecordUsage(req.UserID, req.Model, req.Subsystem,
+	id, err := h.svc.RecordUsageEvent(req.EventID, req.UserID, req.Model, req.Subsystem,
 		req.InputTokens, req.CacheHitTokens, req.CacheMissTokens, req.OutputTokens)
 	if err != nil {
 		log.Printf("RecordUsage internal error: %v", err)
+		if errors.Is(err, service.ErrInvalidBillingRequest) {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}
@@ -373,6 +381,10 @@ func (h *BillingHandler) InitBalanceInternal(c *gin.Context) {
 	id, err := h.svc.InitBalance(req.UserID)
 	if err != nil {
 		log.Printf("InitBalance error: %v", err)
+		if errors.Is(err, service.ErrInvalidBillingRequest) {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
 		return
 	}

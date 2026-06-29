@@ -78,6 +78,7 @@ novel-harness db init
 `author@local.test`，并把 `owner_user_id=0` 的历史作品分配给该账号。已有账号的密码
 默认不会改变；需要重置时使用
 `novel-harness db bootstrap-local-user --reset-password`。
+初始余额初始化使用幂等键，Billing 临时不可用时命令会失败，可在 Billing 恢复后重跑。
 
 停止整套本地服务：
 
@@ -114,6 +115,7 @@ DATABASE_PASSWORD=novel_agent_password
 
 AUTH_REQUIRED=true
 AUTH_SERVICE_URL=http://localhost:8001
+AUTH_INTERNAL_API_KEY=replace-with-an-auth-internal-secret
 AUTH_DATABASE_NAME=novel_auth
 PHONE_REGISTRATION_ENABLED=false
 LOCAL_ACCOUNT_BOOTSTRAP_ENABLED=true
@@ -159,8 +161,9 @@ RESEARCH_FETCH_ENABLED=true
 root 数据库账户只由 `novel-harness db init` 使用。应用运行时使用权限受限的
 `novel_agent` 账户。生产环境必须更换示例凭据并通过密钥管理系统注入。
 
-Auth 与 Billing 必须使用相同的 `JWT_SECRET`；Auth、Billing 和 Python API 必须使用
-相同的 `BILLING_INTERNAL_API_KEY`。实际密钥只放在各自未跟踪的 `.env` 中。
+Auth 与 Billing 必须使用相同的 `JWT_SECRET`。Python API 调用 Auth 内部管理接口时
+使用 `AUTH_INTERNAL_API_KEY`，Auth 调用 Billing 以及 Python API 上报用量时使用
+`BILLING_INTERNAL_API_KEY`。实际密钥只放在各自未跟踪的 `.env` 中。
 
 ## 本地开发
 
@@ -390,16 +393,17 @@ curl -X POST http://127.0.0.1:8000/projects/PROJECT_ID/workflows \
   }'
 ```
 
-升级前已经存在的项目会以 `owner_user_id=0` 保留，不会自动暴露给任意新用户。注册并
-确认目标 Auth 用户 ID 后，显式执行一次：
+升级前已经存在的项目会以 `owner_user_id=0` 保留。`AUTH_REQUIRED=true` 时不会自动暴露给
+任意新用户；注册并确认目标 Auth 用户 ID 后，显式执行一次：
 
 ```bash
 novel-harness db assign-legacy-owner USER_ID --confirm
 ```
 
 每次 Agent 调用会在执行前通过 Billing 检查余额，成功后按 Auth 用户 ID 上报输入和
-输出 Token。Billing 不可用或余额为负时，新的生成调用会被拒绝；已完成但用量上报
-失败的调用会记录 `billing_usage_report_failed` 错误日志。
+输出 Token。Billing 不可用或余额为负时，新的生成调用会被拒绝；已完成的用量上报
+使用 `agent-run:<trace_id>` 作为幂等键，瞬时失败会短暂重试，最终失败的调用会记录
+`billing_usage_report_failed` 错误日志。
 
 完整 OpenAPI 文档位于 `/docs`。`/health` 是进程存活检查，`/health/ready` 会检查
 MySQL、MinIO 和 Milvus。

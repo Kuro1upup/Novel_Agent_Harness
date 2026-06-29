@@ -68,8 +68,12 @@ func (s *AuthService) Register(email, phone, password, code, method string) (*do
 		return nil, err
 	}
 
-	// Best-effort: initialize new user balance via billing service.
-	go s.initBalance(user.ID)
+	// Best-effort: regular self-registration should not fail because Billing is temporarily down.
+	go func(userID int64) {
+		if err := s.initBalance(userID); err != nil {
+			log.Printf("WARNING: init-balance failed for user=%d: %v", userID, err)
+		}
+	}(user.ID)
 
 	return user, nil
 }
@@ -106,6 +110,9 @@ func (s *AuthService) BootstrapLocalUser(
 			}
 			user.EmailVerified = true
 		}
+		if err := s.initBalance(user.ID); err != nil {
+			return nil, false, err
+		}
 		return user, false, nil
 	}
 
@@ -119,6 +126,9 @@ func (s *AuthService) BootstrapLocalUser(
 		if user == nil {
 			return nil, false, err
 		}
+		if err := s.initBalance(user.ID); err != nil {
+			return nil, false, err
+		}
 		return user, false, nil
 	}
 	if nickname != "" {
@@ -128,7 +138,9 @@ func (s *AuthService) BootstrapLocalUser(
 		}
 		user.Nickname, _ = profile["nickname"].(string)
 	}
-	s.initBalance(user.ID)
+	if err := s.initBalance(user.ID); err != nil {
+		return nil, false, err
+	}
 	return user, true, nil
 }
 
@@ -509,7 +521,7 @@ func (s *AuthService) UserResponse(user *domain.User) map[string]interface{} {
 	return s.buildUserDict(user)
 }
 
-func (s *AuthService) initBalance(userID int64) {
+func (s *AuthService) initBalance(userID int64) error {
 	body := map[string]interface{}{
 		"user_id": userID,
 	}
@@ -518,24 +530,22 @@ func (s *AuthService) initBalance(userID int64) {
 	req, err := http.NewRequest("POST", s.billingURL+"/api/billing/internal/init-balance",
 		bytes.NewReader(jsonBody))
 	if err != nil {
-		log.Printf("WARNING: init-balance request build failed for user=%d: %v", userID, err)
-		return
+		return fmt.Errorf("init-balance request build failed for user=%d: %w", userID, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Internal-Api-Key", s.internalAPIKey)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		log.Printf("WARNING: init-balance call failed for user=%d: %v", userID, err)
-		return
+		return fmt.Errorf("init-balance call failed for user=%d: %w", userID, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("WARNING: init-balance returned status=%d for user=%d", resp.StatusCode, userID)
-		return
+		return fmt.Errorf("init-balance returned status=%d for user=%d", resp.StatusCode, userID)
 	}
 	log.Printf("Initial balance created for new user=%d", userID)
+	return nil
 }
 
 func maskEmailStatic(email string) string {

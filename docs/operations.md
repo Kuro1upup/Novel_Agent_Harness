@@ -15,12 +15,13 @@ uvicorn novel_harness.api:app --host 0.0.0.0 --port 8000
 novel-harness worker
 ```
 
-发布检查必须确认 Auth/Billing 的 `JWT_SECRET` 一致，且三个服务的
-`BILLING_INTERNAL_API_KEY` 一致。`/health/ready` 会把 Auth 和 Billing 纳入必需依赖。
+发布检查必须确认 Auth/Billing 的 `JWT_SECRET` 一致。Python API 调用 Auth 内部管理
+接口使用 `AUTH_INTERNAL_API_KEY`，Auth 调用 Billing 以及 Python API 上报用量使用
+`BILLING_INTERNAL_API_KEY`。`/health/ready` 会把 Auth 和 Billing 纳入必需依赖。
 
 升级到 0.5.1 后执行 `novel-harness db migrate` 并重启 Auth/Billing。Billing 启动时
-会为用量表增加幂等事件键；Python 迁移继续维护章节、当前草稿与已接受版本。归档是
-无损操作，不删除对象、向量或关联关系；归档项目上的新工作流和生成请求会被拒绝。
+会为用量表和充值表增加幂等事件键；Python 迁移继续维护章节、当前草稿与已接受版本。
+归档是无损操作，不删除对象、向量或关联关系；归档项目上的新工作流和生成请求会被拒绝。
 
 本地整套服务可使用 `make local-up` 启动、`make local-down` 停止，使用
 `make local-status` 查看状态。
@@ -29,7 +30,8 @@ novel-harness worker
 密钥调用 Auth，只创建已验证邮箱账号，并把未归属历史作品分配给该用户。Auth 二进制
 默认关闭此能力；Docker Compose 的本地配置通过
 `LOCAL_ACCOUNT_BOOTSTRAP_ENABLED=true` 显式开启。已有密码只有传入
-`--reset-password` 时才会替换。
+`--reset-password` 时才会替换。初始余额写入是幂等操作；如果 Billing 临时不可用，
+`make local-bootstrap` 会失败，恢复后重跑即可补齐余额。
 
 `make check` 会通过两个 Go Dockerfile 的 `check` 阶段运行 `gofmt`、`go vet` 和
 `go test`，因此执行完整检查需要 Docker。

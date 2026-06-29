@@ -117,11 +117,36 @@ func isDuplicateKeyError(err error) bool {
 
 // RecordRecharge inserts a recharge record.
 func (r *BillingRepo) RecordRecharge(userID int64, amountYuan decimal.Decimal, note string) (int64, error) {
+	return r.RecordRechargeEvent("", userID, amountYuan, note)
+}
+
+// RecordRechargeEvent inserts a recharge record with an optional idempotency key.
+func (r *BillingRepo) RecordRechargeEvent(
+	eventID string,
+	userID int64,
+	amountYuan decimal.Decimal,
+	note string,
+) (int64, error) {
+	var eventIDValue interface{}
+	if eventID != "" {
+		eventIDValue = eventID
+	}
 	result, err := r.db.Exec(
-		`INSERT INTO recharges (user_id, amount_yuan, note) VALUES (?, ?, ?)`,
-		userID, amountYuan.String(), note,
+		`INSERT INTO recharges (event_id, user_id, amount_yuan, note) VALUES (?, ?, ?, ?)`,
+		eventIDValue, userID, amountYuan.String(), note,
 	)
 	if err != nil {
+		if eventID != "" && isDuplicateKeyError(err) {
+			var existingID int64
+			queryErr := r.db.QueryRow(
+				`SELECT id FROM recharges WHERE event_id = ?`,
+				eventID,
+			).Scan(&existingID)
+			if queryErr != nil {
+				return 0, fmt.Errorf("find existing recharge event: %w", queryErr)
+			}
+			return existingID, nil
+		}
 		return 0, fmt.Errorf("insert recharge: %w", err)
 	}
 	id, _ := result.LastInsertId()
@@ -131,7 +156,12 @@ func (r *BillingRepo) RecordRecharge(userID int64, amountYuan decimal.Decimal, n
 
 // InitBalance creates an initial recharge for a new user (¥1.34).
 func (r *BillingRepo) InitBalance(userID int64) (int64, error) {
-	return r.RecordRecharge(userID, decimal.NewFromFloat(1.34), "新用户初始余额")
+	return r.RecordRechargeEvent(
+		fmt.Sprintf("init-balance:%d", userID),
+		userID,
+		decimal.NewFromFloat(1.34),
+		"新用户初始余额",
+	)
 }
 
 // GetRecharges returns recharge history for a user, optionally filtered by date range.

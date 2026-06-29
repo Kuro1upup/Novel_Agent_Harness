@@ -137,7 +137,7 @@ func main() {
 	// ── Wiring ──
 	userRepo := repository.NewUserRepo(db)
 	verificationSvc := service.NewVerificationService(userRepo, smsClient, emailClient, cfg.FrontendURL)
-	authSvc := service.NewAuthService(userRepo, cfg.JWTSecret, cfg.BillingServiceURL, cfg.InternalAPIKey, verificationSvc)
+	authSvc := service.NewAuthService(userRepo, cfg.JWTSecret, cfg.BillingServiceURL, cfg.BillingInternalAPIKey, verificationSvc)
 	authHandler := handler.NewAuthHandler(authSvc, cfg)
 	oauthHandler := handler.NewOAuthHandler()
 
@@ -197,7 +197,7 @@ func main() {
 	}
 
 	localAdmin := r.Group("/api/auth/internal")
-	localAdmin.Use(middleware.InternalAuthMiddleware(cfg.InternalAPIKey))
+	localAdmin.Use(middleware.InternalAuthMiddleware(cfg.AuthInternalAPIKey))
 	{
 		localAdmin.POST("/bootstrap", authHandler.BootstrapLocalUser)
 	}

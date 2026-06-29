@@ -9,8 +9,10 @@ import pytest
 from novel_harness.api import create_app
 from novel_harness.exceptions import AuthenticationError, InsufficientBalanceError
 from novel_harness.integrations import AuthenticatedUser, AuthServiceClient, BillingServiceClient
+from novel_harness.models import GenerationResult
 from novel_harness.providers.llm import LLMResponse, MockLLMProvider
-from novel_harness.services import AgentRunService, ProjectService
+from novel_harness.services import AgentRunService, ProjectService, WorkflowService
+from novel_harness.storage import Repositories, session_scope
 
 
 class FakeAuthClient:
@@ -86,6 +88,29 @@ async def test_auth_client_bootstraps_local_user_with_internal_key() -> None:
 
 
 @pytest.mark.asyncio
+async def test_auth_client_requires_internal_key_for_local_bootstrap() -> None:
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(500)),
+        base_url="http://auth.test",
+    )
+    client = AuthServiceClient(
+        "http://auth.test",
+        internal_api_key="",
+        timeout_seconds=1,
+        client=http_client,
+    )
+    try:
+        with pytest.raises(AuthenticationError, match="AUTH_INTERNAL_API_KEY"):
+            await client.bootstrap_local_user(
+                email="author@local.test",
+                password="local-password",
+                nickname="本地作者",
+            )
+    finally:
+        await http_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_api_requires_auth_and_isolates_projects_by_user(runtime) -> None:
     runtime.settings.auth_required = True
     runtime._auth_client = FakeAuthClient()
@@ -122,6 +147,71 @@ async def test_api_requires_auth_and_isolates_projects_by_user(runtime) -> None:
 
 
 @pytest.mark.asyncio
+async def test_api_development_mode_lists_legacy_projects(runtime) -> None:
+    runtime.settings.auth_required = False
+    with session_scope(runtime.session_factory) as db_session:
+        legacy = ProjectService(db_session).create(name="旧项目", genre="历史")
+
+    transport = httpx.ASGITransport(app=create_app(runtime=runtime))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/projects")
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [legacy.id]
+    assert response.json()[0]["owner_user_id"] == 0
+
+
+@pytest.mark.asyncio
+async def test_api_isolates_drafts_and_workflows_by_user(runtime) -> None:
+    runtime.settings.auth_required = True
+    runtime._auth_client = FakeAuthClient()
+    transport = httpx.ASGITransport(app=create_app(runtime=runtime))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/projects",
+            headers={"Authorization": "Bearer user-11"},
+            json={"name": "长安", "genre": "历史"},
+        )
+        project_id = created.json()["id"]
+
+        with session_scope(runtime.session_factory) as db_session:
+            repositories = Repositories(db_session)
+            draft = repositories.generations.add(
+                GenerationResult(project_id=project_id, body="", bible_version=1)
+            )
+            workflow_id = (
+                WorkflowService(db_session)
+                .create_chapter_workflow(
+                    project_id,
+                    goal="进入长安",
+                )
+                .run.id
+            )
+
+        owner_draft = await client.get(
+            f"/drafts/{draft.id}",
+            headers={"Authorization": "Bearer user-11"},
+        )
+        other_draft = await client.get(
+            f"/drafts/{draft.id}",
+            headers={"Authorization": "Bearer user-12"},
+        )
+        owner_workflow = await client.get(
+            f"/workflows/{workflow_id}",
+            headers={"Authorization": "Bearer user-11"},
+        )
+        other_workflow = await client.get(
+            f"/workflows/{workflow_id}",
+            headers={"Authorization": "Bearer user-12"},
+        )
+
+    assert owner_draft.status_code == 200
+    assert other_draft.status_code == 404
+    assert owner_workflow.status_code == 200
+    assert other_workflow.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_agent_run_checks_balance_and_reports_usage(session) -> None:
     project = ProjectService(session).create(
         owner_user_id=42,
@@ -150,15 +240,16 @@ async def test_agent_run_checks_balance_and_reports_usage(session) -> None:
 
     assert await service.execute(project.id, "scene_writer", operation) == "完成"
     assert billing.checked == [42]
-    assert billing.usage == [
-        {
-            "user_id": 42,
-            "model": "deepseek-chat",
-            "subsystem": "novel_harness",
-            "input_tokens": 120,
-            "output_tokens": 30,
-        }
-    ]
+    assert len(billing.usage) == 1
+    usage = dict(billing.usage[0])
+    assert str(usage.pop("event_id")).startswith("agent-run:")
+    assert usage == {
+        "user_id": 42,
+        "model": "deepseek-chat",
+        "subsystem": "novel_harness",
+        "input_tokens": 120,
+        "output_tokens": 30,
+    }
 
 
 @pytest.mark.asyncio
@@ -209,5 +300,40 @@ async def test_billing_client_rejects_zero_balance() -> None:
     try:
         with pytest.raises(InsufficientBalanceError):
             await client.ensure_available_balance(42)
+    finally:
+        await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_billing_client_reports_usage_with_event_id() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/billing/internal/usage"
+        assert request.headers["X-Internal-Api-Key"] == "test-key"
+        payload = json.loads(request.content)
+        assert payload["event_id"] == "agent-run:test-trace"
+        assert payload["user_id"] == 42
+        assert payload["input_tokens"] == 12
+        assert payload["cache_miss_tokens"] == 12
+        return httpx.Response(200, json={"success": True, "id": 1})
+
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="http://billing.test",
+    )
+    client = BillingServiceClient(
+        "http://billing.test",
+        internal_api_key="test-key",
+        timeout_seconds=1,
+        client=http_client,
+    )
+    try:
+        await client.record_usage(
+            event_id="agent-run:test-trace",
+            user_id=42,
+            model="deepseek",
+            subsystem="novel_harness",
+            input_tokens=12,
+            output_tokens=8,
+        )
     finally:
         await http_client.aclose()

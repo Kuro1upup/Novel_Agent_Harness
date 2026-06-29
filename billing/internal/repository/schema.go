@@ -47,11 +47,13 @@ const (
 	ddlRecharges = `
 	CREATE TABLE IF NOT EXISTS recharges (
 		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+		event_id VARCHAR(128) NULL,
 		user_id BIGINT UNSIGNED NOT NULL,
 		amount_yuan DECIMAL(12,2) NOT NULL DEFAULT 0.00,
 		note VARCHAR(500) NOT NULL DEFAULT '',
 		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY (id),
+		UNIQUE KEY uq_recharges_event_id (event_id),
 		KEY idx_recharges_user (user_id, created_at)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
 )
@@ -73,6 +75,16 @@ func EnsureSchema(db *sql.DB) error {
 	for _, stmt := range usageUpgradeStmts {
 		if _, err := db.Exec(stmt); err != nil && !isDuplicateSchemaError(err) {
 			return fmt.Errorf("upgrade usage schema: %w", err)
+		}
+	}
+
+	rechargeUpgradeStmts := []string{
+		"ALTER TABLE recharges ADD COLUMN event_id VARCHAR(128) NULL AFTER id",
+		"CREATE UNIQUE INDEX uq_recharges_event_id ON recharges (event_id)",
+	}
+	for _, stmt := range rechargeUpgradeStmts {
+		if _, err := db.Exec(stmt); err != nil && !isDuplicateSchemaError(err) {
+			return fmt.Errorf("upgrade recharge schema: %w", err)
 		}
 	}
 

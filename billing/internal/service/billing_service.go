@@ -1,11 +1,18 @@
 package service
 
 import (
+	"errors"
+	"fmt"
+	"strings"
+
 	"github.com/shopspring/decimal"
 
 	"second-brain/billing/internal/domain"
 	"second-brain/billing/internal/repository"
 )
+
+// ErrInvalidBillingRequest marks caller-supplied billing payloads that should be rejected with 400.
+var ErrInvalidBillingRequest = errors.New("invalid billing request")
 
 // BillingService orchestrates billing business logic.
 type BillingService struct {
@@ -35,6 +42,17 @@ func (s *BillingService) RecordUsage(userID int64, model, subsystem string,
 // RecordUsageEvent records an idempotent stream event and updates its monthly bill atomically.
 func (s *BillingService) RecordUsageEvent(eventID string, userID int64, model, subsystem string,
 	inputTokens, cacheHitTokens, cacheMissTokens, outputTokens int) (int64, error) {
+	model = strings.TrimSpace(model)
+	subsystem = strings.TrimSpace(subsystem)
+	if userID <= 0 {
+		return 0, fmt.Errorf("%w: user_id must be positive", ErrInvalidBillingRequest)
+	}
+	if model == "" || subsystem == "" {
+		return 0, fmt.Errorf("%w: model and subsystem are required", ErrInvalidBillingRequest)
+	}
+	if inputTokens < 0 || cacheHitTokens < 0 || cacheMissTokens < 0 || outputTokens < 0 {
+		return 0, fmt.Errorf("%w: token counts must not be negative", ErrInvalidBillingRequest)
+	}
 	total := inputTokens + outputTokens
 	record := &domain.TokenUsageRecord{
 		EventID:         eventID,
@@ -74,6 +92,9 @@ func (s *BillingService) GetRecharges(userID int64, startDate, endDate string) (
 
 // InitBalance gives a new user their initial balance.
 func (s *BillingService) InitBalance(userID int64) (int64, error) {
+	if userID <= 0 {
+		return 0, fmt.Errorf("%w: user_id must be positive", ErrInvalidBillingRequest)
+	}
 	return s.repo.InitBalance(userID)
 }
 

@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     auth_required: bool = True
     auth_service_url: str = "http://localhost:8001"
     auth_request_timeout_seconds: float = 5.0
+    auth_internal_api_key: str = ""
     auth_database_name: str = "novel_auth"
 
     billing_enabled: bool = True
