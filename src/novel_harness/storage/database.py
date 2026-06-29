@@ -73,44 +73,54 @@ def create_schema_for_testing(engine: Engine) -> None:
 
 
 def provision_mysql() -> None:
-    """Create isolated application/Auth/Billing databases and the app user.
+    """Create isolated application/Auth/Billing databases and service users.
 
     This is an explicit installation operation. Normal application startup must
-    use the restricted application account and must not call this function.
+    use restricted service accounts and must not call this function.
     """
 
     settings = Settings()
-    databases = (
-        settings.database_name,
-        settings.auth_database_name,
-        settings.billing_database_name,
+    accounts = (
+        (settings.database_name, settings.database_user, settings.database_password),
+        (
+            settings.auth_database_name,
+            settings.auth_database_user or settings.database_user,
+            settings.auth_database_password or settings.database_password,
+        ),
+        (
+            settings.billing_database_name,
+            settings.billing_database_user or settings.database_user,
+            settings.billing_database_password or settings.database_password,
+        ),
     )
-    app_user = settings.database_user
-    app_password = settings.database_password
-    for database in databases:
+    for database, user, _password in accounts:
         if not re.fullmatch(r"[A-Za-z0-9_]+", database):
             raise ValueError("database names may contain only letters, digits, and '_'")
-    if not re.fullmatch(r"[A-Za-z0-9_]+", app_user):
-        raise ValueError("DATABASE_USER may contain only letters, digits, and '_'")
-    escaped_password = app_password.replace("\\", "\\\\").replace("'", "\\'")
+        if not re.fullmatch(r"[A-Za-z0-9_]+", user):
+            raise ValueError("database users may contain only letters, digits, and '_'")
+    user_passwords: dict[str, str] = {}
+    for _database, user, password in accounts:
+        previous = user_passwords.setdefault(user, password)
+        if previous != password:
+            raise ValueError("the same database user cannot be configured with two passwords")
     root_url = database_url_from_env(database="mysql", root=True)
     engine = create_engine(root_url, pool_pre_ping=True)
     try:
         with engine.begin() as connection:
-            connection.execute(
-                text(
-                    f"CREATE USER IF NOT EXISTS '{app_user}'@'%' IDENTIFIED BY '{escaped_password}'"
+            for user, password in user_passwords.items():
+                escaped_password = password.replace("\\", "\\\\").replace("'", "\\'")
+                connection.execute(
+                    text(
+                        f"CREATE USER IF NOT EXISTS '{user}'@'%' IDENTIFIED BY '{escaped_password}'"
+                    )
                 )
-            )
-            for database in databases:
+            for database, user, _password in accounts:
                 connection.execute(
                     text(
                         f"CREATE DATABASE IF NOT EXISTS `{database}` "
                         "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
                     )
                 )
-                connection.execute(
-                    text(f"GRANT ALL PRIVILEGES ON `{database}`.* TO '{app_user}'@'%'")
-                )
+                connection.execute(text(f"GRANT ALL PRIVILEGES ON `{database}`.* TO '{user}'@'%'"))
     finally:
         engine.dispose()

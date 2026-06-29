@@ -5,7 +5,9 @@
 API 和 Worker 使用同一个镜像、同一套环境变量，并连接现有 MySQL、MinIO、Milvus
 和可选 Redis。Auth 与 Billing 使用独立 Go 镜像。三个业务组件共享一个 MySQL 实例，
 但分别使用 `novel_agent`、`novel_auth`、`novel_billing` 数据库。API 与 Worker
-可以独立扩缩容；迁移只在发布阶段执行一次。
+可以独立扩缩容；迁移只在发布阶段执行一次。`novel-harness db init` 兼容旧配置下的
+单一应用数据库账号，也支持 `AUTH_DATABASE_USER` 与 `BILLING_DATABASE_USER` 分别授予
+对应数据库权限。
 
 ```bash
 novel-harness db migrate
@@ -18,6 +20,8 @@ novel-harness worker
 发布检查必须确认 Auth/Billing 的 `JWT_SECRET` 一致。Python API 调用 Auth 内部管理
 接口使用 `AUTH_INTERNAL_API_KEY`，Auth 调用 Billing 以及 Python API 上报用量使用
 `BILLING_INTERNAL_API_KEY`。`/health/ready` 会把 Auth 和 Billing 纳入必需依赖。
+Billing 的 `/api/health` 还会返回 `redis_connected` 和 `usage_consumer_started`，
+当 HTTP 服务可用但用量事件消费降级时用于告警。
 
 升级到 0.5.1 后执行 `novel-harness db migrate` 并重启 Auth/Billing。Billing 启动时
 会为用量表和充值表增加幂等事件键；Python 迁移继续维护章节、当前草稿与已接受版本。

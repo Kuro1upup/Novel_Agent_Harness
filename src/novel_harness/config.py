@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     auth_request_timeout_seconds: float = 5.0
     auth_internal_api_key: str = ""
     auth_database_name: str = "novel_auth"
+    auth_database_user: str = ""
+    auth_database_password: str = ""
 
     billing_enabled: bool = True
     billing_required: bool = True
@@ -80,6 +82,8 @@ class Settings(BaseSettings):
     billing_internal_api_key: str = ""
     billing_request_timeout_seconds: float = 5.0
     billing_database_name: str = "novel_billing"
+    billing_database_user: str = ""
+    billing_database_password: str = ""
 
     request_timeout_seconds: float = 30.0
     provider_max_retries: int = 2

@@ -11,6 +11,7 @@ from novel_harness.exceptions import AuthenticationError, InsufficientBalanceErr
 from novel_harness.integrations import AuthenticatedUser, AuthServiceClient, BillingServiceClient
 from novel_harness.models import GenerationResult
 from novel_harness.providers.llm import LLMResponse, MockLLMProvider
+from novel_harness.security import bind_user, reset_user
 from novel_harness.services import AgentRunService, ProjectService, WorkflowService
 from novel_harness.storage import Repositories, session_scope
 
@@ -209,6 +210,57 @@ async def test_api_isolates_drafts_and_workflows_by_user(runtime) -> None:
     assert other_draft.status_code == 404
     assert owner_workflow.status_code == 200
     assert other_workflow.status_code == 404
+
+
+def test_repositories_scope_secondary_queries_to_current_user(session) -> None:
+    project_11 = ProjectService(session).create(
+        owner_user_id=11,
+        name="长安",
+        genre="历史",
+    )
+    project_12 = ProjectService(session).create(
+        owner_user_id=12,
+        name="洛阳",
+        genre="历史",
+    )
+    repositories = Repositories(session)
+    draft_11 = repositories.generations.add(
+        GenerationResult(project_id=project_11.id, body="", bible_version=1)
+    )
+    repositories.generations.add(
+        GenerationResult(project_id=project_12.id, body="", bible_version=1)
+    )
+    run_11 = (
+        WorkflowService(session)
+        .create_chapter_workflow(
+            project_11.id,
+            goal="进入长安",
+        )
+        .run
+    )
+    run_12 = (
+        WorkflowService(session)
+        .create_chapter_workflow(
+            project_12.id,
+            goal="进入洛阳",
+        )
+        .run
+    )
+
+    token = bind_user(11)
+    try:
+        assert [item.id for item in repositories.generations.list_by_status(project_11.id)] == [
+            draft_11.id
+        ]
+        assert repositories.generations.list_by_status(project_12.id) == []
+        assert [item.id for item in repositories.workflow_runs.list_for_project(project_11.id)] == [
+            run_11.id
+        ]
+        assert repositories.workflow_runs.list_for_project(project_12.id) == []
+        assert repositories.workflow_steps.list_for_run(run_11.id)
+        assert repositories.workflow_steps.list_for_run(run_12.id) == []
+    finally:
+        reset_user(token)
 
 
 @pytest.mark.asyncio

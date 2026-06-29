@@ -347,9 +347,9 @@ class StoryBibleRepository(JsonRepository[StoryBible]):
     create = add
 
     def get_for_project(self, project_id: str) -> StoryBible | None:
-        record = self.session.scalar(
-            select(StoryBibleORM).where(StoryBibleORM.project_id == project_id)
-        )
+        statement = select(StoryBibleORM).where(StoryBibleORM.project_id == project_id)
+        statement = self._scope_to_owner(statement)
+        record = self.session.scalar(statement)
         return StoryBible.model_validate(record.payload) if record is not None else None
 
     def update_versioned(self, bible: StoryBible, *, expected_version: int) -> StoryBible:
@@ -361,13 +361,21 @@ class StoryBibleRepository(JsonRepository[StoryBible]):
             update={"version": expected_version + 1, "updated_at": utc_now()}
         )
         payload = updated.model_dump(mode="json")
+        conditions: list[Any] = [
+            StoryBibleORM.id == bible.id,
+            StoryBibleORM.project_id == bible.project_id,
+            StoryBibleORM.version == expected_version,
+        ]
+        owner_user_id = current_user_id()
+        if owner_user_id is not None:
+            owned_projects = select(NovelProjectORM.id).where(
+                NovelProjectORM.owner_user_id == owner_user_id,
+                NovelProjectORM.status == "active",
+            )
+            conditions.append(StoryBibleORM.project_id.in_(owned_projects))
         result = self.session.execute(
             update(StoryBibleORM)
-            .where(
-                StoryBibleORM.id == bible.id,
-                StoryBibleORM.project_id == bible.project_id,
-                StoryBibleORM.version == expected_version,
-            )
+            .where(*conditions)
             .values(
                 payload=payload,
                 version=updated.version,
@@ -394,12 +402,20 @@ class StoryBibleRepository(JsonRepository[StoryBible]):
         return self.update_versioned(model, expected_version=model.version)
 
     def get_version(self, bible_id: str, version: int) -> StoryBible | None:
-        record = self.session.scalar(
-            select(StoryBibleVersionORM).where(
-                StoryBibleVersionORM.bible_id == bible_id,
-                StoryBibleVersionORM.version == version,
-            )
+        statement = select(StoryBibleVersionORM).where(
+            StoryBibleVersionORM.bible_id == bible_id,
+            StoryBibleVersionORM.version == version,
         )
+        owner_user_id = current_user_id()
+        if owner_user_id is not None:
+            statement = statement.join(
+                NovelProjectORM,
+                StoryBibleVersionORM.project_id == NovelProjectORM.id,
+            ).where(
+                NovelProjectORM.owner_user_id == owner_user_id,
+                NovelProjectORM.status == "active",
+            )
+        record = self.session.scalar(statement)
         return StoryBible.model_validate(record.payload) if record else None
 
 
@@ -427,6 +443,7 @@ class PlotOptionRepository(JsonRepository[PlotOption]):
             .where(PlotOptionORM.plot_plan_id == plot_plan_id)
             .order_by(PlotOptionORM.created_at)
         )
+        statement = self._scope_to_owner(statement)
         return [
             PlotOption.model_validate(record.payload) for record in self.session.scalars(statement)
         ]
@@ -473,6 +490,7 @@ class GenerationRepository(JsonRepository[GenerationResult]):
         statement = (
             statement.order_by(GenerationResultORM.created_at.desc()).offset(offset).limit(limit)
         )
+        statement = self._scope_to_owner(statement)
         return [
             GenerationResult.model_validate(record.payload)
             for record in self.session.scalars(statement)
@@ -614,6 +632,7 @@ class ContinuityIssueRepository(JsonRepository[ContinuityIssue]):
             .where(ContinuityIssueORM.draft_id == draft_id)
             .order_by(ContinuityIssueORM.created_at)
         )
+        statement = self._scope_to_owner(statement)
         return [
             ContinuityIssue.model_validate(record.payload)
             for record in self.session.scalars(statement)
@@ -633,6 +652,7 @@ class FactRiskRepository(JsonRepository[FactRisk]):
             .where(FactRiskORM.draft_id == draft_id)
             .order_by(FactRiskORM.created_at)
         )
+        statement = self._scope_to_owner(statement)
         return [
             FactRisk.model_validate(record.payload) for record in self.session.scalars(statement)
         ]
@@ -653,12 +673,12 @@ class DocumentRepository(JsonRepository[Document]):
         }
 
     def get_by_hash(self, project_id: str, content_hash: str) -> Document | None:
-        record = self.session.scalar(
-            select(DocumentORM).where(
-                DocumentORM.project_id == project_id,
-                DocumentORM.content_hash == content_hash,
-            )
+        statement = select(DocumentORM).where(
+            DocumentORM.project_id == project_id,
+            DocumentORM.content_hash == content_hash,
         )
+        statement = self._scope_to_owner(statement)
+        record = self.session.scalar(statement)
         return Document.model_validate(record.payload) if record else None
 
 
@@ -751,6 +771,7 @@ class WorkflowRunRepository(JsonRepository[WorkflowRun]):
         )
         if status is not None:
             statement = statement.where(WorkflowRunORM.status == status)
+        statement = self._scope_to_owner(statement)
         return [
             WorkflowRun.model_validate(record.payload) for record in self.session.scalars(statement)
         ]
@@ -760,12 +781,12 @@ class WorkflowRunRepository(JsonRepository[WorkflowRun]):
         project_id: str,
         idempotency_key: str,
     ) -> WorkflowRun | None:
-        record = self.session.scalar(
-            select(WorkflowRunORM).where(
-                WorkflowRunORM.project_id == project_id,
-                WorkflowRunORM.idempotency_key == idempotency_key,
-            )
+        statement = select(WorkflowRunORM).where(
+            WorkflowRunORM.project_id == project_id,
+            WorkflowRunORM.idempotency_key == idempotency_key,
         )
+        statement = self._scope_to_owner(statement)
+        record = self.session.scalar(statement)
         return WorkflowRun.model_validate(record.payload) if record else None
 
     def require_for_update(self, run_id: str) -> WorkflowRun:
@@ -846,29 +867,29 @@ class WorkflowStepRepository(JsonRepository[WorkflowStep]):
             .where(WorkflowStepORM.run_id == run_id)
             .order_by(WorkflowStepORM.position)
         )
+        statement = self._scope_to_owner(statement)
         return [
             WorkflowStep.model_validate(record.payload)
             for record in self.session.scalars(statement)
         ]
 
     def get_for_run(self, run_id: str, name: str) -> WorkflowStep | None:
-        record = self.session.scalar(
-            select(WorkflowStepORM).where(
-                WorkflowStepORM.run_id == run_id,
-                WorkflowStepORM.name == name,
-            )
+        statement = select(WorkflowStepORM).where(
+            WorkflowStepORM.run_id == run_id,
+            WorkflowStepORM.name == name,
         )
+        statement = self._scope_to_owner(statement)
+        record = self.session.scalar(statement)
         return WorkflowStep.model_validate(record.payload) if record else None
 
     def get_for_run_for_update(self, run_id: str, name: str) -> WorkflowStep | None:
+        statement = select(WorkflowStepORM).where(
+            WorkflowStepORM.run_id == run_id,
+            WorkflowStepORM.name == name,
+        )
+        statement = self._scope_to_owner(statement)
         record = self.session.scalar(
-            select(WorkflowStepORM)
-            .where(
-                WorkflowStepORM.run_id == run_id,
-                WorkflowStepORM.name == name,
-            )
-            .with_for_update()
-            .execution_options(populate_existing=True)
+            statement.with_for_update().execution_options(populate_existing=True)
         )
         return WorkflowStep.model_validate(record.payload) if record else None
 
@@ -891,6 +912,7 @@ class WorkflowEventRepository(JsonRepository[WorkflowEvent]):
             .where(WorkflowEventORM.run_id == run_id)
             .order_by(WorkflowEventORM.sequence)
         )
+        statement = self._scope_to_owner(statement)
         return [
             WorkflowEvent.model_validate(record.payload)
             for record in self.session.scalars(statement)
@@ -951,12 +973,12 @@ class MemoryRecordRepository(JsonRepository[MemoryRecord]):
         }
 
     def get_by_hash(self, project_id: str, source_hash: str) -> MemoryRecord | None:
-        record = self.session.scalar(
-            select(MemoryRecordORM).where(
-                MemoryRecordORM.project_id == project_id,
-                MemoryRecordORM.source_hash == source_hash,
-            )
+        statement = select(MemoryRecordORM).where(
+            MemoryRecordORM.project_id == project_id,
+            MemoryRecordORM.source_hash == source_hash,
         )
+        statement = self._scope_to_owner(statement)
+        record = self.session.scalar(statement)
         return MemoryRecord.model_validate(record.payload) if record else None
 
     def list_active(
@@ -980,23 +1002,31 @@ class MemoryRecordRepository(JsonRepository[MemoryRecord]):
         )
         if kinds:
             statement = statement.where(MemoryRecordORM.kind.in_(kinds))
+        statement = self._scope_to_owner(statement)
         return [
             MemoryRecord.model_validate(record.payload)
             for record in self.session.scalars(statement)
         ]
 
     def list_for_draft(self, draft_id: str) -> list[MemoryRecord]:
-        records = self.session.scalars(
+        statement = (
             select(MemoryRecordORM)
             .where(MemoryRecordORM.source_draft_id == draft_id)
             .order_by(MemoryRecordORM.created_at)
         )
+        statement = self._scope_to_owner(statement)
+        records = self.session.scalars(statement)
         return [MemoryRecord.model_validate(record.payload) for record in records]
 
     def delete_for_project(self, project_id: str) -> int:
-        result = self.session.execute(
-            delete(MemoryRecordORM).where(MemoryRecordORM.project_id == project_id)
-        )
+        statement = delete(MemoryRecordORM).where(MemoryRecordORM.project_id == project_id)
+        owner_user_id = current_user_id()
+        if owner_user_id is not None:
+            owned_projects = select(NovelProjectORM.id).where(
+                NovelProjectORM.owner_user_id == owner_user_id
+            )
+            statement = statement.where(MemoryRecordORM.project_id.in_(owned_projects))
+        result = self.session.execute(statement)
         return int(cast(CursorResult[Any], result).rowcount or 0)
 
 

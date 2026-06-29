@@ -31,6 +31,13 @@
 - HTTP 用量上报接口也接受 `event_id`，Python 使用 `agent-run:<trace_id>` 幂等上报并短暂重试。
 - 初始余额充值写入 `recharges.event_id` 唯一键，重复调用不会重复发放。
 
+### 4. 中低优先级收尾
+
+- 仓储层对草稿、工作流、记忆、资料和 Story Bible 的辅助查询下沉 owner scope，减少新增入口绕过项目归属校验的风险。
+- MySQL 初始化支持 Auth/Billing 使用独立数据库账号，旧的单账号配置仍保持兼容。
+- Auth 登录产生的 legacy token 自动保留最近 10 条，避免长期本地使用导致 token 表无限增长。
+- Billing `/api/health` 返回 Redis 连接与 usage consumer 启动状态，用于识别用量事件消费降级。
+
 ## 升级方式
 
 ```bash

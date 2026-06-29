@@ -127,8 +127,35 @@ func (r *UserRepo) Login(login, password string) (*domain.User, string, error) {
 	if tokenID == 0 {
 		return nil, "", fmt.Errorf("failed to generate unique token after retries")
 	}
+	if err := r.PruneUserTokens(u.ID, 10); err != nil {
+		log.Printf("WARNING: failed to prune legacy tokens for user=%d: %v", u.ID, err)
+	}
 
 	return &u, token, nil
+}
+
+// PruneUserTokens keeps the newest legacy tokens for a user and removes older rows.
+func (r *UserRepo) PruneUserTokens(userID int64, keep int) error {
+	if keep < 1 {
+		keep = 1
+	}
+	_, err := r.db.Exec(
+		`DELETE FROM user_tokens
+		 WHERE user_id = ?
+		   AND id NOT IN (
+		     SELECT id FROM (
+		       SELECT id FROM user_tokens
+		       WHERE user_id = ?
+		       ORDER BY created_at DESC, id DESC
+		       LIMIT ?
+		     ) AS recent_tokens
+		   )`,
+		userID, userID, keep,
+	)
+	if err != nil {
+		return fmt.Errorf("prune legacy tokens: %w", err)
+	}
+	return nil
 }
 
 // GetByToken looks up a user by their session token.

@@ -110,8 +110,8 @@ services:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_DATABASE: ${BILLING_DATABASE_NAME:-novel_billing}
-      MYSQL_USER: ${DATABASE_USER:-novel_agent}
-      MYSQL_PASSWORD: ${DATABASE_PASSWORD:-novel_agent_password}
+      MYSQL_USER: ${BILLING_DATABASE_USER:-${DATABASE_USER:-novel_agent}}
+      MYSQL_PASSWORD: ${BILLING_DATABASE_PASSWORD:-${DATABASE_PASSWORD:-novel_agent_password}}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-myredissecret}
@@ -141,8 +141,8 @@ services:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_DATABASE: ${AUTH_DATABASE_NAME:-novel_auth}
-      MYSQL_USER: ${DATABASE_USER:-novel_agent}
-      MYSQL_PASSWORD: ${DATABASE_PASSWORD:-novel_agent_password}
+      MYSQL_USER: ${AUTH_DATABASE_USER:-${DATABASE_USER:-novel_agent}}
+      MYSQL_PASSWORD: ${AUTH_DATABASE_PASSWORD:-${DATABASE_PASSWORD:-novel_agent_password}}
       MINIO_ENDPOINT: minio:9000
       MINIO_BUCKET: novel-auth
       BILLING_SERVICE_URL: http://billing:8002

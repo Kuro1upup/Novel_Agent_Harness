@@ -99,8 +99,8 @@ make local-down
 - Web：`localhost:5173`
 
 MySQL 使用同一个实例中的三个数据库：`novel_agent` 保存创作数据，`novel_auth`
-保存用户，`novel_billing` 保存余额和账单。`novel-harness db init` 会创建三个库并
-向受限应用账户授权。
+保存用户，`novel_billing` 保存余额和账单。`novel-harness db init` 会创建三个库；
+默认兼容旧配置使用同一个受限应用账户，也可以为 Auth/Billing 配置独立库账号。
 
 建议的本地 `.env`：
 
@@ -117,6 +117,8 @@ AUTH_REQUIRED=true
 AUTH_SERVICE_URL=http://localhost:8001
 AUTH_INTERNAL_API_KEY=replace-with-an-auth-internal-secret
 AUTH_DATABASE_NAME=novel_auth
+AUTH_DATABASE_USER=novel_auth
+AUTH_DATABASE_PASSWORD=novel_auth_password
 PHONE_REGISTRATION_ENABLED=false
 LOCAL_ACCOUNT_BOOTSTRAP_ENABLED=true
 
@@ -125,6 +127,8 @@ BILLING_REQUIRED=true
 BILLING_SERVICE_URL=http://localhost:8002
 BILLING_INTERNAL_API_KEY=replace-with-a-shared-random-secret
 BILLING_DATABASE_NAME=novel_billing
+BILLING_DATABASE_USER=novel_billing
+BILLING_DATABASE_PASSWORD=novel_billing_password
 
 MINIO_ENDPOINT=localhost:20000
 MINIO_ACCESS_KEY=minioadmin
@@ -622,7 +626,9 @@ docker run -p 8080:80 novel-harness-web:0.2.0
 ```
 
 API 收到终止信号后执行运行时资源清理；Worker 完成当前步骤后停止领取新任务。
-`/health/ready` 失败会写入告警日志，容器健康检查使用 `/health`。
+`/health/ready` 失败会写入告警日志，容器健康检查使用 `/health`。Billing 的
+`/api/health` 会额外返回 `redis_connected` 和 `usage_consumer_started`，用于判断
+用量事件流是否处于降级状态。
 
 ## 安全、版权与限制
 

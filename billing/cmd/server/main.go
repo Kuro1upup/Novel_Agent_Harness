@@ -123,9 +123,11 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	usageConsumerStarted := false
 	if redisClient.Ping(context.Background()).Err() == nil {
 		consumer := service.NewUsageConsumer(redisClient, billingSvc)
 		consumer.Start(ctx)
+		usageConsumerStarted = true
 	}
 
 	// ── Gin ──
@@ -158,7 +160,17 @@ func main() {
 
 	// Health.
 	r.GET("/api/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "healthy", "service": "billing"})
+		redisHealthy := redisClient.Ping(c.Request.Context()).Err() == nil
+		status := "healthy"
+		if !redisHealthy || !usageConsumerStarted {
+			status = "degraded"
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"status":                 status,
+			"service":                "billing",
+			"redis_connected":        redisHealthy,
+			"usage_consumer_started": usageConsumerStarted,
+		})
 	})
 
 	// ── Graceful shutdown ──
