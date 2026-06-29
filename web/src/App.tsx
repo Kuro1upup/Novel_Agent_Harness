@@ -7,6 +7,7 @@ import {
   ChevronRight,
   CircleDot,
   Download,
+  FolderArchive,
   GitCompare,
   LayoutDashboard,
   Library,
@@ -14,9 +15,13 @@ import {
   Menu,
   Network,
   PenLine,
+  Plus,
+  ReceiptText,
   RefreshCw,
+  RotateCcw,
   Search,
   Send,
+  Settings2,
   Sparkles,
   WalletCards,
   X,
@@ -26,6 +31,9 @@ import { api, authSession } from './api'
 import type {
   AgentRun,
   AuthUser,
+  BillingBalance,
+  BillingBills,
+  BillingUsage,
   Draft,
   MemoryHit,
   PlotPlan,
@@ -35,7 +43,15 @@ import type {
   WorkflowDetail,
 } from './types'
 
-type Tab = 'overview' | 'bible' | 'plot' | 'workflows' | 'drafts' | 'memory'
+type Tab =
+  | 'overview'
+  | 'bible'
+  | 'plot'
+  | 'workflows'
+  | 'drafts'
+  | 'memory'
+  | 'settings'
+  | 'billing'
 
 const navItems: Array<{ id: Tab; label: string; icon: typeof BookOpen }> = [
   { id: 'overview', label: '项目概览', icon: LayoutDashboard },
@@ -44,6 +60,8 @@ const navItems: Array<{ id: Tab; label: string; icon: typeof BookOpen }> = [
   { id: 'workflows', label: '审批队列', icon: CircleDot },
   { id: 'drafts', label: '章节草稿', icon: PenLine },
   { id: 'memory', label: '长期记忆', icon: Archive },
+  { id: 'settings', label: '作品设置', icon: Settings2 },
+  { id: 'billing', label: '用量与账单', icon: ReceiptText },
 ]
 
 const statusLabels: Record<string, string> = {
@@ -103,12 +121,15 @@ function Workspace({ user, onLogout }: { user: AuthUser; onLogout: () => void })
   const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(true)
   const [balance, setBalance] = useState<number>()
+  const [showCreate, setShowCreate] = useState(false)
 
   const loadProjects = useCallback(async () => {
     try {
-      const result = await api.projects()
+      const result = await api.projects(true)
       setProjects(result)
-      setProjectId((current) => current || result[0]?.id || '')
+      const selected = result.find((item) => item.status === 'active') || result[0]
+      setProjectId(selected?.id || '')
+      if (selected?.status === 'archived') setTab('settings')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '无法读取项目')
     } finally {
@@ -128,6 +149,9 @@ function Workspace({ user, onLogout }: { user: AuthUser; onLogout: () => void })
   }, [notice])
 
   const project = projects.find((item) => item.id === projectId)
+  const visibleNavItems = navItems.filter(
+    (item) => project?.status !== 'archived' || item.id === 'settings' || item.id === 'billing',
+  )
   const feedback = useCallback((message: string) => {
     setNotice(message)
     setError('')
@@ -174,15 +198,24 @@ function Workspace({ user, onLogout }: { user: AuthUser; onLogout: () => void })
 
         <label className="project-picker">
           <span>当前作品</span>
-          <select value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+          <select value={projectId} onChange={(event) => {
+            const selected = projects.find((item) => item.id === event.target.value)
+            setProjectId(event.target.value)
+            if (selected?.status === 'archived') setTab('settings')
+          }}>
             {projects.map((item) => (
-              <option key={item.id} value={item.id}>{item.name}</option>
+              <option key={item.id} value={item.id}>
+                {item.status === 'archived' ? `已归档 · ${item.name}` : item.name}
+              </option>
             ))}
           </select>
+          <button className="new-project-button" onClick={() => setShowCreate(true)}>
+            <Plus size={14} />新建作品
+          </button>
         </label>
 
         <nav>
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon
             return (
               <button
@@ -215,7 +248,10 @@ function Workspace({ user, onLogout }: { user: AuthUser; onLogout: () => void })
             <Menu size={20} />
           </button>
           <div>
-            <span className="eyebrow">{project?.genre} · {project?.sub_genre || '未设置子类型'}</span>
+            <span className="eyebrow">
+              {project?.status === 'archived' ? '已归档 · ' : ''}
+              {project?.genre} · {project?.sub_genre || '未设置子类型'}
+            </span>
             <h1>{navItems.find((item) => item.id === tab)?.label}</h1>
           </div>
           <div className="topbar-meta">
@@ -247,12 +283,37 @@ function Workspace({ user, onLogout }: { user: AuthUser; onLogout: () => void })
           {tab === 'memory' && project && (
             <MemoryWorkspace project={project} fail={fail} />
           )}
+          {tab === 'settings' && project && (
+            <ProjectSettings
+              key={project.id}
+              project={project}
+              onUpdated={(updated) => {
+                setProjects((items) => items.map((item) => item.id === updated.id ? updated : item))
+                if (updated.status === 'archived') setTab('settings')
+              }}
+              feedback={feedback}
+              fail={fail}
+            />
+          )}
+          {tab === 'billing' && <BillingCenter fail={fail} />}
         </div>
       </main>
 
       {mobileOpen && <button className="scrim" onClick={() => setMobileOpen(false)} />}
       {error && <Toast kind="error" message={error} onClose={() => setError('')} />}
       {notice && <Toast kind="success" message={notice} onClose={() => setNotice('')} />}
+      {showCreate && (
+        <ProjectDialog
+          onClose={() => setShowCreate(false)}
+          onCreated={(created) => {
+            setProjects((items) => [...items, created])
+            setProjectId(created.id)
+            setTab('overview')
+            setShowCreate(false)
+            feedback('新作品已创建')
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -358,6 +419,242 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => 
           <ChevronRight size={17} />
         </button>
       </div>
+    </div>
+  )
+}
+
+function ProjectDialog({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void
+  onCreated: (project: Project) => void
+}) {
+  const [name, setName] = useState('')
+  const [genre, setGenre] = useState('历史')
+  const [premise, setPremise] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const create = async () => {
+    if (!name.trim()) return
+    setBusy(true)
+    try {
+      onCreated(await api.createProject({ name, genre, premise }))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '创建失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="dialog-card"
+        role="dialog"
+        aria-modal="true"
+        aria-label="新建作品"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header>
+          <div><span className="eyebrow">New project</span><h2>新建作品</h2></div>
+          <button className="icon-button" onClick={onClose}><X size={18} /></button>
+        </header>
+        <Field label="作品名" value={name} onChange={setName} placeholder="例如：长安旧梦" />
+        <Field label="类型" value={genre} onChange={setGenre} placeholder="历史、玄幻、都市…" />
+        <Field
+          label="一句话梗概"
+          value={premise}
+          onChange={setPremise}
+          placeholder="主角是谁，他必须完成什么？"
+          multiline
+        />
+        {error && <p className="form-error">{error}</p>}
+        <div className="button-row">
+          <button className="secondary" onClick={onClose}>取消</button>
+          <button className="primary" disabled={busy || !name.trim()} onClick={() => void create()}>
+            {busy ? '创建中…' : '创建作品'}
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function ProjectSettings({
+  project,
+  onUpdated,
+  feedback,
+  fail,
+}: {
+  project: Project
+  onUpdated: (project: Project) => void
+  feedback: (message: string) => void
+  fail: (reason: unknown) => void
+}) {
+  const [name, setName] = useState(project.name)
+  const [genre, setGenre] = useState(project.genre)
+  const [subGenre, setSubGenre] = useState(project.sub_genre || '')
+  const [premise, setPremise] = useState(project.premise)
+  const [audience, setAudience] = useState(project.target_audience)
+  const [tone, setTone] = useState(project.tone)
+  const [busy, setBusy] = useState(false)
+
+  const update = async (payload: Partial<Project>, message: string) => {
+    setBusy(true)
+    try {
+      const updated = await api.updateProject(project.id, payload)
+      onUpdated(updated)
+      feedback(message)
+    } catch (reason) {
+      fail(reason)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const save = () => update(
+    {
+      name: name.trim(),
+      genre: genre.trim(),
+      sub_genre: subGenre.trim() || null,
+      premise,
+      target_audience: audience,
+      tone,
+    },
+    '作品信息已更新',
+  )
+
+  const toggleArchive = async () => {
+    if (project.status === 'active' && !window.confirm('归档后将暂停该作品的生成和编辑，确认继续？')) {
+      return
+    }
+    await update(
+      { status: project.status === 'active' ? 'archived' : 'active' },
+      project.status === 'active' ? '作品已归档' : '作品已恢复',
+    )
+  }
+
+  return (
+    <div className="page-stack">
+      <section className="section-heading">
+        <div>
+          <span className="eyebrow">Project settings</span>
+          <h2>作品设置</h2>
+          <p>维护作品定位；归档会保留全部数据，但暂停生成和编辑操作。</p>
+        </div>
+        <span className={`status ${project.status}`}>
+          {project.status === 'active' ? '创作中' : '已归档'}
+        </span>
+      </section>
+      <section className="settings-card">
+        <div className="form-row">
+          <Field label="作品名" value={name} onChange={setName} placeholder="作品名" />
+          <Field label="主类型" value={genre} onChange={setGenre} placeholder="历史、玄幻、都市…" />
+        </div>
+        <div className="form-row">
+          <Field label="子类型" value={subGenre} onChange={setSubGenre} placeholder="可选" />
+          <Field label="目标读者" value={audience} onChange={setAudience} placeholder="例如：成年历史读者" />
+        </div>
+        <Field label="基调" value={tone} onChange={setTone} placeholder="例如：克制、悬疑、现实主义" />
+        <Field label="故事梗概" value={premise} onChange={setPremise} placeholder="核心冲突与目标" multiline />
+        <div className="settings-actions">
+          <button
+            className={project.status === 'active' ? 'danger-ghost' : 'secondary'}
+            disabled={busy}
+            onClick={() => void toggleArchive()}
+          >
+            {project.status === 'active'
+              ? <><FolderArchive size={16} />归档作品</>
+              : <><RotateCcw size={16} />恢复创作</>}
+          </button>
+          <button
+            className="primary"
+            disabled={busy || !name.trim() || !genre.trim() || project.status === 'archived'}
+            onClick={() => void save()}
+          >
+            {busy ? '保存中…' : '保存设置'}
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function BillingCenter({ fail }: { fail: (reason: unknown) => void }) {
+  const [balance, setBalance] = useState<BillingBalance>()
+  const [usage, setUsage] = useState<BillingUsage>()
+  const [bills, setBills] = useState<BillingBills>()
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    Promise.all([api.balance(), api.billingUsage(), api.billingBills()])
+      .then(([nextBalance, nextUsage, nextBills]) => {
+        setBalance(nextBalance)
+        setUsage(nextUsage)
+        setBills(nextBills)
+      })
+      .catch(fail)
+      .finally(() => setLoading(false))
+  }, [fail])
+
+  if (loading) return <LoadingBlock />
+
+  return (
+    <div className="page-stack">
+      <section className="section-heading">
+        <div>
+          <span className="eyebrow">Billing center</span>
+          <h2>用量与账单</h2>
+          <p>按账户汇总模型 Token、消费金额和充值记录。</p>
+        </div>
+      </section>
+      <section className="metric-grid billing-metrics">
+        <Metric label="当前余额" value={`¥${(balance?.balance || 0).toFixed(2)}`} note="余额为 0 时暂停生成" />
+        <Metric label="累计充值" value={`¥${(balance?.total_recharge || 0).toFixed(2)}`} note={`${balance?.recharges.length || 0} 笔`} />
+        <Metric label="累计消费" value={`¥${(balance?.total_consumption || 0).toFixed(4)}`} note="按模型价格结算" />
+        <Metric label="本期 Token" value={(usage?.total_tokens || 0).toLocaleString()} note={`¥${(usage?.total_cost || 0).toFixed(4)}`} />
+      </section>
+      <section className="two-column billing-columns">
+        <Panel title="每日用量">
+          <div className="data-table">
+            <div className="data-table-head"><span>日期 / 模型</span><span>Token</span><span>费用</span></div>
+            {usage?.items.map((item) => (
+              <div key={`${item.date}-${item.model}-${item.subsystem}`}>
+                <span><strong>{item.date}</strong><small>{item.model} · {item.subsystem}</small></span>
+                <span>{item.total_tokens.toLocaleString()}</span>
+                <span>¥{item.cost_yuan.toFixed(4)}</span>
+              </div>
+            ))}
+            {!usage?.items.length && <Empty text="本期尚无模型用量。" />}
+          </div>
+        </Panel>
+        <Panel title="月度账单">
+          <div className="data-table">
+            <div className="data-table-head"><span>月份 / 模型</span><span>Token</span><span>费用</span></div>
+            {bills?.items.map((item) => (
+              <div key={`${item.bill_month}-${item.model}`}>
+                <span><strong>{item.bill_month}</strong><small>{item.model}</small></span>
+                <span>{(item.total_input_tokens + item.total_output_tokens).toLocaleString()}</span>
+                <span>¥{item.cost_yuan.toFixed(4)}</span>
+              </div>
+            ))}
+            {!bills?.items.length && <Empty text="尚未生成月度账单。" />}
+          </div>
+        </Panel>
+      </section>
+      <Panel title="充值记录">
+        <div className="recharge-list">
+          {balance?.recharges.map((item) => (
+            <div key={item.id}>
+              <span><strong>+ ¥{item.amount_yuan.toFixed(2)}</strong><small>{item.note}</small></span>
+              <time>{new Date(item.created_at).toLocaleString()}</time>
+            </div>
+          ))}
+          {!balance?.recharges.length && <Empty text="暂无充值记录。" />}
+        </div>
+      </Panel>
     </div>
   )
 }

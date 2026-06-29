@@ -7,7 +7,7 @@ import pytest
 
 from novel_harness.api import create_app
 from novel_harness.exceptions import AuthenticationError, InsufficientBalanceError
-from novel_harness.integrations import AuthenticatedUser
+from novel_harness.integrations import AuthenticatedUser, BillingServiceClient
 from novel_harness.providers.llm import LLMResponse, MockLLMProvider
 from novel_harness.services import AgentRunService, ProjectService
 
@@ -140,3 +140,29 @@ async def test_agent_run_stops_before_provider_when_balance_is_insufficient(sess
         await service.execute(project.id, "scene_writer", operation)
     assert called is False
     assert service.list(project.id) == []
+
+
+@pytest.mark.asyncio
+async def test_billing_client_rejects_zero_balance() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["X-Internal-Api-Key"] == "test-key"
+        return httpx.Response(
+            200,
+            json={"success": True, "balance": 0, "is_negative": False},
+        )
+
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="http://billing.test",
+    )
+    client = BillingServiceClient(
+        "http://billing.test",
+        internal_api_key="test-key",
+        timeout_seconds=1,
+        client=http_client,
+    )
+    try:
+        with pytest.raises(InsufficientBalanceError):
+            await client.ensure_available_balance(42)
+    finally:
+        await http_client.aclose()

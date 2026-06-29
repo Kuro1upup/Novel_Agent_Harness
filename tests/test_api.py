@@ -134,3 +134,51 @@ async def test_api_exposes_empty_memory_state_and_query(runtime) -> None:
         )
         assert query.status_code == 200, query.text
         assert query.json() == {"revision": 0, "hits": [], "conflicts": []}
+
+
+@pytest.mark.asyncio
+async def test_api_updates_archives_and_restores_project(runtime) -> None:
+    transport = httpx.ASGITransport(app=create_app(runtime=runtime))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/projects",
+            json={"name": "旧名", "genre": "历史"},
+        )
+        project_id = created.json()["id"]
+
+        updated = await client.patch(
+            f"/projects/{project_id}",
+            json={"name": "长安旧梦", "tone": "克制"},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["name"] == "长安旧梦"
+        assert updated.json()["tone"] == "克制"
+
+        archived = await client.patch(
+            f"/projects/{project_id}",
+            json={"status": "archived"},
+        )
+        assert archived.status_code == 200
+        assert archived.json()["status"] == "archived"
+        assert archived.json()["archived_at"] is not None
+
+        assert (await client.get("/projects")).json() == []
+        all_projects = await client.get("/projects?include_archived=true")
+        assert all_projects.json()[0]["id"] == project_id
+
+        blocked = await client.get(f"/projects/{project_id}/bible")
+        assert blocked.status_code == 409
+        assert blocked.json()["error"] == "project_archived"
+        blocked_update = await client.patch(
+            f"/projects/{project_id}",
+            json={"name": "不应更新"},
+        )
+        assert blocked_update.status_code == 409
+
+        restored = await client.patch(
+            f"/projects/{project_id}",
+            json={"status": "active"},
+        )
+        assert restored.status_code == 200
+        assert restored.json()["archived_at"] is None
+        assert (await client.get("/projects")).json()[0]["id"] == project_id

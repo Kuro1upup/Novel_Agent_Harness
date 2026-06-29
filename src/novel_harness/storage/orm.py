@@ -66,6 +66,8 @@ class NovelProjectORM(TimestampMixin, Base):
     premise: Mapped[str] = mapped_column(LONG_TEXT, nullable=False, default="")
     target_audience: Mapped[str] = mapped_column(Text, nullable=False, default="")
     tone: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class StyleProfileORM(ProjectOwnedMixin, Base):

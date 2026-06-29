@@ -11,6 +11,7 @@ from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
+from novel_harness.exceptions import ProjectArchivedError
 from novel_harness.models import (
     AgentRun,
     CanonPatch,
@@ -92,6 +93,8 @@ class ProjectRepository:
                 premise=project.premise,
                 target_audience=project.target_audience,
                 tone=project.tone,
+                status=project.status,
+                archived_at=project.archived_at,
                 created_at=project.created_at,
                 updated_at=project.updated_at,
             )
@@ -109,16 +112,31 @@ class ProjectRepository:
         record = self.session.scalar(statement)
         return self._to_domain(record) if record is not None else None
 
-    def require(self, project_id: str) -> NovelProject:
+    def require(
+        self,
+        project_id: str,
+        *,
+        include_archived: bool = False,
+    ) -> NovelProject:
         project = self.get(project_id)
         if project is None:
             raise ResourceNotFoundError(f"Novel project {project_id!r} was not found")
+        if project.status == "archived" and not include_archived:
+            raise ProjectArchivedError(f"Novel project {project_id!r} is archived")
         return project
 
-    def list(self, *, offset: int = 0, limit: int = 100) -> list[NovelProject]:
+    def list(
+        self,
+        *,
+        include_archived: bool = False,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> list[NovelProject]:
         statement = (
             select(NovelProjectORM).order_by(NovelProjectORM.created_at).offset(offset).limit(limit)
         )
+        if not include_archived:
+            statement = statement.where(NovelProjectORM.status == "active")
         owner_user_id = current_user_id()
         if owner_user_id is not None:
             statement = statement.where(NovelProjectORM.owner_user_id == owner_user_id)
@@ -140,6 +158,8 @@ class ProjectRepository:
             "premise",
             "target_audience",
             "tone",
+            "status",
+            "archived_at",
             "updated_at",
         ):
             setattr(record, field, getattr(project, field))
@@ -253,7 +273,10 @@ class JsonRepository(Generic[ModelT]):
         return statement.join(
             NovelProjectORM,
             self.orm_model.project_id == NovelProjectORM.id,
-        ).where(NovelProjectORM.owner_user_id == owner_user_id)
+        ).where(
+            NovelProjectORM.owner_user_id == owner_user_id,
+            NovelProjectORM.status == "active",
+        )
 
 
 class StyleProfileRepository(JsonRepository[StyleProfile]):

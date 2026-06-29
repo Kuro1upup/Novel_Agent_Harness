@@ -2,6 +2,8 @@ import type {
   AgentRun,
   AuthUser,
   BillingBalance,
+  BillingBills,
+  BillingUsage,
   Draft,
   MemoryHit,
   PlotPlan,
@@ -94,9 +96,17 @@ export const api = {
       }),
     }),
   balance: () => request<BillingBalance & { success: boolean }>('/api/billing/balance'),
-  projects: () => request<Project[]>('/projects'),
+  billingUsage: () => request<BillingUsage & { success: boolean }>('/api/billing/usage'),
+  billingBills: () => request<BillingBills & { success: boolean }>('/api/billing/bills'),
+  projects: (includeArchived = false) =>
+    request<Project[]>(`/projects?include_archived=${includeArchived}`),
   createProject: (payload: Partial<Project>) =>
     request<Project>('/projects', { method: 'POST', body: JSON.stringify(payload) }),
+  updateProject: (projectId: string, payload: Partial<Project>) =>
+    request<Project>(`/projects/${projectId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
   bible: (projectId: string) => request<StoryBible>(`/projects/${projectId}/bible`),
   addBibleEntry: (
     projectId: string,

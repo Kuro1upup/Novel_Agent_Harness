@@ -24,6 +24,7 @@ from novel_harness.exceptions import (
     InsufficientBalanceError,
     NovelHarnessError,
     OriginalityError,
+    ProjectArchivedError,
     WorkflowStateError,
 )
 from novel_harness.integrations import AuthenticatedUser, ServiceClient
@@ -54,6 +55,7 @@ from novel_harness.models import (
     PlotRequest,
     PlotSelectionRequest,
     ProjectCreate,
+    ProjectUpdate,
     ResearchNote,
     ResearchRequest,
     StoryBible,
@@ -257,12 +259,26 @@ def create_app(
         )
 
     @app.get("/projects", response_model=list[NovelProject])
-    async def list_projects(session: SessionDep) -> list[NovelProject]:
-        return ProjectService(session).list()
+    async def list_projects(
+        session: SessionDep,
+        include_archived: bool = False,
+    ) -> list[NovelProject]:
+        return ProjectService(session).list(include_archived=include_archived)
 
     @app.get("/projects/{project_id}", response_model=NovelProject)
     async def get_project(project_id: str, session: SessionDep) -> NovelProject:
         return ProjectService(session).get(project_id)
+
+    @app.patch("/projects/{project_id}", response_model=NovelProject)
+    async def update_project(
+        project_id: str,
+        payload: ProjectUpdate,
+        session: SessionDep,
+    ) -> NovelProject:
+        return ProjectService(session).update(
+            project_id,
+            **payload.model_dump(exclude_unset=True),
+        )
 
     @app.post("/projects/{project_id}/style/analyze", response_model=StyleProfile)
     async def analyze_style(
@@ -801,6 +817,10 @@ def _register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(InsufficientBalanceError)
     async def insufficient_balance(_: Request, exc: InsufficientBalanceError) -> JSONResponse:
         return response(402, "insufficient_balance", str(exc))
+
+    @app.exception_handler(ProjectArchivedError)
+    async def project_archived(_: Request, exc: ProjectArchivedError) -> JSONResponse:
+        return response(409, "project_archived", str(exc))
 
     async def bad_request(_: Request, exc: Exception) -> JSONResponse:
         return response(422, "invalid_request", str(exc))

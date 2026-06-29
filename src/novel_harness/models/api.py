@@ -24,6 +24,16 @@ class ProjectCreate(DomainModel):
     tone: str = ""
 
 
+class ProjectUpdate(DomainModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    genre: str | None = Field(default=None, min_length=1, max_length=100)
+    sub_genre: str | None = Field(default=None, max_length=100)
+    premise: str | None = None
+    target_audience: str | None = None
+    tone: str | None = None
+    status: Literal["active", "archived"] | None = None
+
+
 class ResearchRequest(DomainModel):
     topic: str = Field(min_length=1)
     historical_context: str = ""

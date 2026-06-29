@@ -25,6 +25,10 @@ class ResourceNotFoundError(NovelHarnessError):
     """A requested domain resource does not exist."""
 
 
+class ProjectArchivedError(NovelHarnessError):
+    """An archived project cannot accept authoring operations."""
+
+
 class ConflictError(NovelHarnessError):
     """A write conflicts with the current resource version."""
 

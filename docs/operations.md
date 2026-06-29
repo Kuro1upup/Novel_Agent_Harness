@@ -18,6 +18,10 @@ novel-harness worker
 发布检查必须确认 Auth/Billing 的 `JWT_SECRET` 一致，且三个服务的
 `BILLING_INTERNAL_API_KEY` 一致。`/health/ready` 会把 Auth 和 Billing 纳入必需依赖。
 
+升级到 0.3.0 后执行 `novel-harness db migrate`，迁移会为项目增加 `active/archived`
+生命周期字段。归档是无损操作，不删除对象、向量或关联关系；归档项目上的新工作流和
+生成请求会被拒绝。
+
 ## 日志与告警
 
 生产环境建议同时收集容器标准错误流和 `LOG_FILE`。日志不包含正文、导入样文、完整

@@ -10,6 +10,64 @@ export interface BillingBalance {
   total_recharge: number
   total_consumption: number
   balance: number
+  model_costs: BillingModelCost[]
+  recharges: BillingRecharge[]
+}
+
+export interface BillingModelCost {
+  model: string
+  bill_month: string
+  input_tokens: number
+  cache_hit_tokens: number
+  cache_miss_tokens: number
+  output_tokens: number
+  cost_yuan: number
+}
+
+export interface BillingRecharge {
+  id: number
+  amount_yuan: number
+  note: string
+  created_at: string
+}
+
+export interface BillingUsageItem {
+  date: string
+  model: string
+  subsystem: string
+  total_input_tokens: number
+  total_output_tokens: number
+  total_tokens: number
+  cost_yuan: number
+}
+
+export interface BillingUsage {
+  items: BillingUsageItem[]
+  total_count: number
+  total_tokens: number
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cost: number
+  start_date: string
+  end_date: string
+}
+
+export interface BillingBillItem {
+  model: string
+  bill_month: string
+  total_input_tokens: number
+  total_output_tokens: number
+  cost_yuan: number
+}
+
+export interface BillingBills {
+  items: BillingBillItem[]
+  total_count: number
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cost: number
+  start_date: string
+  end_date: string
 }
 
 export interface Project {
@@ -17,11 +75,14 @@ export interface Project {
   owner_user_id: number
   name: string
   genre: string
-  sub_genre?: string
+  sub_genre?: string | null
   premise: string
   target_audience: string
   tone: string
+  status: 'active' | 'archived'
+  archived_at?: string | null
   created_at: string
+  updated_at: string
 }
 
 export interface Character {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import httpx
@@ -151,12 +152,12 @@ class BillingServiceClient(ServiceClient):
             return
         try:
             payload = response.json()
-            is_negative = bool(payload["is_negative"])
-        except (KeyError, TypeError, ValueError) as exc:
+            balance = Decimal(str(payload["balance"]))
+        except (InvalidOperation, KeyError, TypeError, ValueError) as exc:
             if self.required:
                 raise BillingUnavailableError("计费服务返回了无效响应") from exc
             return
-        if is_negative:
+        if balance <= 0:
             raise InsufficientBalanceError("余额不足，请充值后再使用生成能力")
 
     async def record_usage(

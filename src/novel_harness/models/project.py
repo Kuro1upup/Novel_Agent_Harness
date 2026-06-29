@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import Field
 
@@ -18,5 +19,7 @@ class NovelProject(DomainModel):
     premise: str = ""
     target_audience: str = ""
     tone: str = ""
+    status: Literal["active", "archived"] = "active"
+    archived_at: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
