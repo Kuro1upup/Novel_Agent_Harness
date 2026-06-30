@@ -155,6 +155,20 @@ export interface StoryBible {
   canon_events: Array<Record<string, unknown> | string>
 }
 
+export interface StoryBibleVersionSummary {
+  bible_id: string
+  project_id: string
+  version: number
+  created_at: string
+  is_current: boolean
+}
+
+export interface BibleDiff {
+  from_version: number
+  to_version: number
+  unified_diff: string
+}
+
 export interface PlotOption {
   id: string
   title: string
@@ -193,6 +207,45 @@ export interface Draft {
   revision_number: number
   revision_instruction: string
   created_at: string
+}
+
+export interface QualityIssue {
+  id: string
+  project_id: string
+  issue_type: 'continuity' | 'fact' | 'memory'
+  status: 'open' | 'resolved' | 'ignored'
+  severity: 'info' | 'warning' | 'error'
+  raw_level: string
+  category: string
+  title: string
+  description: string
+  evidence: string
+  suggestion: string
+  draft_id?: string | null
+  chapter_id?: string | null
+  chapter_title?: string | null
+  run_id?: string | null
+  memory_ids: string[]
+  source_urls: string[]
+  resolution_note: string
+  created_at: string
+  updated_at: string
+  resolved_at?: string | null
+}
+
+export interface QualityIssueSummary {
+  total: number
+  open: number
+  resolved: number
+  ignored: number
+  error: number
+  warning: number
+  info: number
+}
+
+export interface QualityIssueList {
+  issues: QualityIssue[]
+  summary: QualityIssueSummary
 }
 
 export interface WorkflowStep {

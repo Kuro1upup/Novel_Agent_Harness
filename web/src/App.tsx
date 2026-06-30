@@ -43,7 +43,9 @@ import type {
   MemoryHit,
   PlotPlan,
   Project,
+  QualityIssueList,
   StoryBible,
+  StoryBibleVersionSummary,
   Workflow,
   WorkflowDetail,
 } from './types'
@@ -53,6 +55,7 @@ type Tab =
   | 'bible'
   | 'plot'
   | 'workflows'
+  | 'quality'
   | 'manuscript'
   | 'drafts'
   | 'memory'
@@ -64,6 +67,7 @@ const navItems: Array<{ id: Tab; label: string; icon: typeof BookOpen }> = [
   { id: 'bible', label: '故事圣经', icon: Library },
   { id: 'plot', label: '剧情规划', icon: Network },
   { id: 'workflows', label: '审批队列', icon: CircleDot },
+  { id: 'quality', label: '审校中心', icon: GitCompare },
   { id: 'manuscript', label: '目录与导出', icon: BookOpen },
   { id: 'drafts', label: '章节草稿', icon: PenLine },
   { id: 'memory', label: '长期记忆', icon: Archive },
@@ -82,9 +86,24 @@ const statusLabels: Record<string, string> = {
   accepted: '已接受',
   rejected: '已拒绝',
   superseded: '已迭代',
+  open: '待处理',
+  resolved: '已解决',
+  ignored: '已忽略',
   planned: '待创作',
   drafting: '创作中',
   completed: '已定稿',
+}
+
+const issueTypeLabels: Record<string, string> = {
+  continuity: '连续性',
+  fact: '事实风险',
+  memory: '长期记忆',
+}
+
+const severityLabels: Record<string, string> = {
+  error: '高',
+  warning: '中',
+  info: '低',
 }
 
 function App() {
@@ -286,6 +305,9 @@ function Workspace({ user, onLogout }: { user: AuthUser; onLogout: () => void })
           )}
           {tab === 'workflows' && project && (
             <WorkflowWorkspace project={project} feedback={feedback} fail={fail} />
+          )}
+          {tab === 'quality' && project && (
+            <QualityWorkspace project={project} feedback={feedback} fail={fail} />
           )}
           {tab === 'manuscript' && project && (
             <ManuscriptWorkspace
@@ -1709,6 +1731,254 @@ function DraftWorkspace({
             )}
           </> : <Empty text="选择一个草稿开始审阅。" />}
         </div>
+      </section>
+    </div>
+  )
+}
+
+function QualityWorkspace({
+  project,
+  feedback,
+  fail,
+}: {
+  project: Project
+  feedback: (message: string) => void
+  fail: (reason: unknown) => void
+}) {
+  const emptySummary = { total: 0, open: 0, resolved: 0, ignored: 0, error: 0, warning: 0, info: 0 }
+  const [data, setData] = useState<QualityIssueList>({ issues: [], summary: emptySummary })
+  const [issueType, setIssueType] = useState<'' | 'continuity' | 'fact' | 'memory'>('')
+  const [issueStatus, setIssueStatus] = useState<'' | 'open' | 'resolved' | 'ignored'>('open')
+  const [selectedId, setSelectedId] = useState('')
+  const [instruction, setInstruction] = useState('')
+  const [versions, setVersions] = useState<StoryBibleVersionSummary[]>([])
+  const [fromVersion, setFromVersion] = useState<number>()
+  const [toVersion, setToVersion] = useState<number>()
+  const [bibleDiff, setBibleDiff] = useState('')
+  const [runs, setRuns] = useState<AgentRun[]>([])
+  const [busy, setBusy] = useState(false)
+
+  const refresh = useCallback(async () => {
+    try {
+      const [quality, bibleVersions, agentRuns] = await Promise.all([
+        api.qualityIssues(project.id, { issue_type: issueType, issue_status: issueStatus }),
+        api.bibleVersions(project.id),
+        api.agentRuns(project.id),
+      ])
+      setData(quality)
+      setSelectedId((current) => (
+        quality.issues.some((issue) => issue.id === current) ? current : quality.issues[0]?.id || ''
+      ))
+      setVersions(bibleVersions)
+      setRuns(agentRuns)
+      setFromVersion((current) => current ?? bibleVersions[1]?.version ?? bibleVersions[0]?.version)
+      setToVersion((current) => current ?? bibleVersions[0]?.version)
+    } catch (reason) {
+      fail(reason)
+    }
+  }, [project.id, issueType, issueStatus, fail])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  const selected = data.issues.find((issue) => issue.id === selectedId)
+
+  useEffect(() => {
+    if (!selected) {
+      setInstruction('')
+      return
+    }
+    setInstruction(selected.suggestion || selected.description)
+  }, [selected])
+
+  const updateStatus = async (status: 'open' | 'resolved' | 'ignored') => {
+    if (!selected) return
+    const note = status === 'open' ? '' : window.prompt('处理说明（可选）', selected.resolution_note)
+    if (note === null) return
+    setBusy(true)
+    try {
+      await api.updateQualityIssue(selected.id, {
+        status,
+        resolution_note: note,
+      })
+      feedback(status === 'open' ? '问题已重新打开' : '问题状态已更新')
+      await refresh()
+    } catch (reason) {
+      fail(reason)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const revise = async () => {
+    if (!selected?.draft_id) return
+    setBusy(true)
+    try {
+      const result = await api.reviseFromQualityIssue(selected.id, instruction)
+      feedback(`已生成第 ${result.draft.revision_number} 版修订草稿`)
+      await refresh()
+    } catch (reason) {
+      fail(reason)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const compareBible = async () => {
+    if (!fromVersion || !toVersion) return
+    setBusy(true)
+    try {
+      const result = await api.bibleDiff(project.id, fromVersion, toVersion)
+      setBibleDiff(result.unified_diff || '两个 Story Bible 版本没有文本差异。')
+    } catch (reason) {
+      fail(reason)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="page-stack">
+      <section className="section-heading">
+        <div>
+          <span className="eyebrow">Quality review · 0.6.0</span>
+          <h2>质量审校与修订闭环</h2>
+          <p>集中处理连续性、事实风险和长期记忆冲突，并从问题直接生成修订草稿。</p>
+        </div>
+        <button className="secondary" onClick={() => void refresh()}><RefreshCw size={15} />刷新</button>
+      </section>
+
+      <section className="metric-grid">
+        <Metric label="总问题" value={String(data.summary.total)} note="当前筛选范围" />
+        <Metric label="待处理" value={String(data.summary.open)} note={`${data.summary.error} 个高优先级`} />
+        <Metric label="已解决" value={String(data.summary.resolved)} note={`${data.summary.ignored} 个已忽略`} />
+      </section>
+
+      <section className="quality-layout">
+        <aside className="quality-sidebar">
+          <div className="quality-filters">
+            <label>
+              <span>类型</span>
+              <select value={issueType} onChange={(event) => setIssueType(event.target.value as typeof issueType)}>
+                <option value="">全部</option>
+                <option value="continuity">连续性</option>
+                <option value="fact">事实风险</option>
+                <option value="memory">长期记忆</option>
+              </select>
+            </label>
+            <label>
+              <span>状态</span>
+              <select value={issueStatus} onChange={(event) => setIssueStatus(event.target.value as typeof issueStatus)}>
+                <option value="">全部</option>
+                <option value="open">待处理</option>
+                <option value="resolved">已解决</option>
+                <option value="ignored">已忽略</option>
+              </select>
+            </label>
+          </div>
+          <div className="quality-list">
+            {data.issues.map((issue) => (
+              <button
+                key={issue.id}
+                className={selectedId === issue.id ? 'active' : ''}
+                onClick={() => setSelectedId(issue.id)}
+              >
+                <div>
+                  <span className={`severity ${issue.severity}`}>{severityLabels[issue.severity]}</span>
+                  <strong>{issue.title}</strong>
+                </div>
+                <p>{issue.description}</p>
+                <small>
+                  {issueTypeLabels[issue.issue_type]} · {statusLabels[issue.status]}
+                  {issue.chapter_title ? ` · ${issue.chapter_title}` : ''}
+                </small>
+              </button>
+            ))}
+            {!data.issues.length && <Empty text="当前筛选条件下没有审校问题。" />}
+          </div>
+        </aside>
+
+        <div className="quality-detail">
+          {selected ? (
+            <>
+              <Panel
+                title={selected.title}
+                action={<span className={`status ${selected.status}`}>{statusLabels[selected.status]}</span>}
+              >
+                <div className="issue-detail-grid">
+                  <div><strong>类型</strong><span>{issueTypeLabels[selected.issue_type]}</span></div>
+                  <div><strong>严重级别</strong><span>{severityLabels[selected.severity]} · {selected.raw_level}</span></div>
+                  <div><strong>章节</strong><span>{selected.chapter_title || selected.chapter_id || '未关联章节'}</span></div>
+                  <div><strong>草稿</strong><span>{selected.draft_id?.slice(0, 8) || '未关联草稿'}</span></div>
+                </div>
+                <div className="issue-copy">
+                  <strong>问题描述</strong>
+                  <p>{selected.description}</p>
+                  {selected.evidence && <><strong>证据</strong><p>{selected.evidence}</p></>}
+                  {selected.suggestion && <><strong>建议</strong><p>{selected.suggestion}</p></>}
+                  {!!selected.memory_ids.length && (
+                    <p className="muted">相关记忆：{selected.memory_ids.join(', ')}</p>
+                  )}
+                </div>
+                <div className="button-row">
+                  <button className="secondary" disabled={busy || selected.status === 'open'} onClick={() => void updateStatus('open')}>重新打开</button>
+                  <button className="secondary" disabled={busy || selected.status === 'ignored'} onClick={() => void updateStatus('ignored')}>忽略</button>
+                  <button className="primary" disabled={busy || selected.status === 'resolved'} onClick={() => void updateStatus('resolved')}><Check size={15} />标记解决</button>
+                </div>
+              </Panel>
+
+              <Panel title="从问题生成修订">
+                <Field
+                  label="修订指令"
+                  value={instruction}
+                  onChange={setInstruction}
+                  placeholder="说明希望修订 Agent 如何处理这个问题"
+                  multiline
+                />
+                <div className="button-row">
+                  <button
+                    className="primary"
+                    disabled={busy || !selected.draft_id || !instruction.trim()}
+                    onClick={() => void revise()}
+                  >
+                    <RefreshCw size={15} />生成修订草稿
+                  </button>
+                </div>
+                {!selected.draft_id && <p className="muted">该问题没有关联草稿，不能直接触发修订。</p>}
+              </Panel>
+            </>
+          ) : (
+            <Empty text="选择一个问题查看详情。" />
+          )}
+        </div>
+      </section>
+
+      <section className="two-column">
+        <Panel title="Story Bible 版本差异">
+          <div className="version-compare">
+            <label>
+              <span>从版本</span>
+              <select value={fromVersion || ''} onChange={(event) => setFromVersion(Number(event.target.value))}>
+                {versions.map((item) => <option key={item.version} value={item.version}>v{item.version}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>到版本</span>
+              <select value={toVersion || ''} onChange={(event) => setToVersion(Number(event.target.value))}>
+                {versions.map((item) => <option key={item.version} value={item.version}>v{item.version}{item.is_current ? ' · 当前' : ''}</option>)}
+              </select>
+            </label>
+            <button className="secondary" disabled={!fromVersion || !toVersion || fromVersion === toVersion || busy} onClick={() => void compareBible()}><GitCompare size={15} />对比</button>
+          </div>
+          {bibleDiff ? <pre className="diff-view compact">{bibleDiff}</pre> : <Empty text="选择两个版本查看 Canon 差异。" />}
+        </Panel>
+        <Panel title="最近 Agent 运行">
+          <div className="run-list">
+            {runs.slice(0, 6).map((run) => <RunRow key={run.id} run={run} />)}
+            {!runs.length && <Empty text="暂无 Agent 运行记录。" />}
+          </div>
+        </Panel>
       </section>
     </div>
   )

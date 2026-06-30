@@ -23,8 +23,9 @@ novel-harness worker
 Billing 的 `/api/health` 还会返回 `redis_connected` 和 `usage_consumer_started`，
 当 HTTP 服务可用但用量事件消费降级时用于告警。
 
-升级到 0.5.1 后执行 `novel-harness db migrate` 并重启 Auth/Billing。Billing 启动时
-会为用量表和充值表增加幂等事件键；Python 迁移继续维护章节、当前草稿与已接受版本。
+升级到 0.6.0 后执行 `novel-harness db migrate` 并重启 API/Worker。若从 0.5.0
+或更早版本升级，也需要重启 Auth/Billing；Billing 启动时会为用量表和充值表增加幂等
+事件键。Python 迁移会继续维护章节、当前草稿、已接受版本和质量审校问题状态索引。
 归档是无损操作，不删除对象、向量或关联关系；归档项目上的新工作流和生成请求会被拒绝。
 
 本地整套服务可使用 `make local-up` 启动、`make local-down` 停止，使用

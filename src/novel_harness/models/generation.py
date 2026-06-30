@@ -46,6 +46,9 @@ class ContinuityIssue(ProjectResource):
     description: str
     evidence: str = ""
     suggestion: str = ""
+    status: Literal["open", "resolved", "ignored"] = "open"
+    resolution_note: str = Field(default="", max_length=2000)
+    resolved_at: datetime | None = None
 
 
 class FactRisk(ProjectResource):
@@ -56,6 +59,9 @@ class FactRisk(ProjectResource):
     reason: str = ""
     source_urls: list[HttpUrl | str] = Field(default_factory=list)
     suggestion: str = ""
+    status: Literal["open", "resolved", "ignored"] = "open"
+    resolution_note: str = Field(default="", max_length=2000)
+    resolved_at: datetime | None = None
 
 
 class AgentRun(ProjectResource):

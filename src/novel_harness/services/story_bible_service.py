@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import difflib
+import json
 from collections.abc import Sequence
 from copy import deepcopy
 from typing import Any
@@ -14,6 +16,7 @@ from novel_harness.models import (
     ForeshadowingItem,
     ForeshadowingProposal,
     StoryBible,
+    StoryBibleVersionSummary,
     TimelineEvent,
     WorldbuildingProposal,
 )
@@ -36,6 +39,42 @@ class StoryBibleService:
             bible = StoryBible(project_id=project_id)
             self.repositories.story_bibles.add(bible)
         return bible
+
+    def list_versions(
+        self,
+        project_id: str,
+        *,
+        limit: int = 1000,
+    ) -> list[StoryBibleVersionSummary]:
+        bible = self.get(project_id)
+        return self.repositories.story_bibles.list_versions(
+            project_id,
+            current_version=bible.version,
+            limit=limit,
+        )
+
+    def get_version(self, project_id: str, version: int) -> StoryBible:
+        bible = self.get(project_id)
+        snapshot = self.repositories.story_bibles.get_version(bible.id, version)
+        if snapshot is None:
+            raise ResourceNotFoundError(
+                f"Story Bible version {version!r} was not found for project {project_id!r}"
+            )
+        return snapshot
+
+    def compare_versions(self, project_id: str, from_version: int, to_version: int) -> str:
+        before = self.get_version(project_id, from_version)
+        after = self.get_version(project_id, to_version)
+        before_json = _canonical_json(before)
+        after_json = _canonical_json(after)
+        return "".join(
+            difflib.unified_diff(
+                before_json.splitlines(keepends=True),
+                after_json.splitlines(keepends=True),
+                fromfile=f"story_bible/v{from_version}",
+                tofile=f"story_bible/v{to_version}",
+            )
+        )
 
     def add_character(
         self,
@@ -367,3 +406,12 @@ class StoryBibleService:
             )
         else:
             raise ValueError(f"unsupported canon operation: {kind!r}")
+
+
+def _canonical_json(bible: StoryBible) -> str:
+    return json.dumps(
+        bible.model_dump(mode="json"),
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )

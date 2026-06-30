@@ -31,6 +31,7 @@ from novel_harness.integrations import AuthenticatedUser, ServiceClient
 from novel_harness.logging_config import configure_logging
 from novel_harness.models import (
     AgentRun,
+    BibleDiffResponse,
     BibleEntryRequest,
     ChapterCreate,
     ChapterUpdate,
@@ -64,9 +65,14 @@ from novel_harness.models import (
     PlotSelectionRequest,
     ProjectCreate,
     ProjectUpdate,
+    QualityIssue,
+    QualityIssueListResponse,
+    QualityIssueRevisionRequest,
+    QualityIssueUpdateRequest,
     ResearchNote,
     ResearchRequest,
     StoryBible,
+    StoryBibleVersionSummary,
     StyleProfile,
     TimelineEventRequest,
     VolumeCreate,
@@ -87,6 +93,7 @@ from novel_harness.security import bind_user, reset_user
 from novel_harness.services import (
     ManuscriptService,
     ProjectService,
+    QualityReviewService,
     StoryBibleService,
     WorkflowService,
 )
@@ -148,7 +155,7 @@ def create_app(
 
     app = FastAPI(
         title="Novel Agent Harness",
-        version="0.5.1",
+        version="0.6.0",
         description="Provider-neutral long-form fiction writing agent harness.",
         lifespan=lifespan,
     )
@@ -481,6 +488,48 @@ def create_app(
     async def get_bible(project_id: str, session: SessionDep) -> StoryBible:
         return StoryBibleService(session).get(project_id)
 
+    @app.get(
+        "/projects/{project_id}/bible/versions",
+        response_model=list[StoryBibleVersionSummary],
+    )
+    async def list_bible_versions(
+        project_id: str,
+        session: SessionDep,
+        limit: int = 100,
+    ) -> list[StoryBibleVersionSummary]:
+        return StoryBibleService(session).list_versions(
+            project_id,
+            limit=min(max(limit, 1), 1000),
+        )
+
+    @app.get(
+        "/projects/{project_id}/bible/versions/{version}",
+        response_model=StoryBible,
+    )
+    async def get_bible_version(
+        project_id: str,
+        version: int,
+        session: SessionDep,
+    ) -> StoryBible:
+        return StoryBibleService(session).get_version(project_id, version)
+
+    @app.get("/projects/{project_id}/bible/diff", response_model=BibleDiffResponse)
+    async def compare_bible_versions(
+        project_id: str,
+        from_version: int,
+        to_version: int,
+        session: SessionDep,
+    ) -> BibleDiffResponse:
+        return BibleDiffResponse(
+            from_version=from_version,
+            to_version=to_version,
+            unified_diff=StoryBibleService(session).compare_versions(
+                project_id,
+                from_version,
+                to_version,
+            ),
+        )
+
     @app.post(
         "/projects/{project_id}/agents/character",
         response_model=CharacterProposalResponse,
@@ -676,6 +725,52 @@ def create_app(
     ) -> CheckResponse:
         issues, risks = await rt.generation_service(session).check(project_id, payload.draft)
         return CheckResponse(continuity_issues=issues, fact_risks=risks)
+
+    @app.get(
+        "/projects/{project_id}/quality/issues",
+        response_model=QualityIssueListResponse,
+    )
+    async def list_quality_issues(
+        project_id: str,
+        session: SessionDep,
+        issue_type: Literal["continuity", "fact", "memory"] | None = None,
+        issue_status: Literal["open", "resolved", "ignored"] | None = None,
+        draft_id: str | None = None,
+        chapter_id: str | None = None,
+        limit: int = 200,
+    ) -> QualityIssueListResponse:
+        return QualityReviewService(session).list_issues(
+            project_id,
+            issue_type=issue_type,
+            status=issue_status,
+            draft_id=draft_id,
+            chapter_id=chapter_id,
+            limit=min(max(limit, 1), 1000),
+        )
+
+    @app.patch("/quality/issues/{issue_id}", response_model=QualityIssue)
+    async def update_quality_issue(
+        issue_id: str,
+        payload: QualityIssueUpdateRequest,
+        session: SessionDep,
+    ) -> QualityIssue:
+        return QualityReviewService(session).update_issue(
+            issue_id,
+            **payload.model_dump(exclude_unset=True),
+        )
+
+    @app.post("/quality/issues/{issue_id}/revise", response_model=WriteResponse)
+    async def revise_from_quality_issue(
+        issue_id: str,
+        payload: QualityIssueRevisionRequest,
+        session: SessionDep,
+        rt: RuntimeDep,
+    ) -> WriteResponse:
+        return await QualityReviewService(session).revise_from_issue(
+            issue_id,
+            rt.generation_service(session),
+            instruction=payload.instruction,
+        )
 
     @app.post("/drafts/{draft_id}/accept", response_model=StoryBible)
     async def accept_draft(draft_id: str, session: SessionDep) -> StoryBible:

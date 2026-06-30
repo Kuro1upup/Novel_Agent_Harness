@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import Field
@@ -250,4 +251,66 @@ class DraftRejectRequest(DomainModel):
 class DraftDiffResponse(DomainModel):
     from_draft_id: str
     to_draft_id: str
+    unified_diff: str
+
+
+class QualityIssue(DomainModel):
+    id: str
+    project_id: str
+    issue_type: Literal["continuity", "fact", "memory"]
+    status: Literal["open", "resolved", "ignored"] = "open"
+    severity: Literal["info", "warning", "error"] = "warning"
+    raw_level: str = ""
+    category: str = ""
+    title: str
+    description: str
+    evidence: str = ""
+    suggestion: str = ""
+    draft_id: str | None = None
+    chapter_id: str | None = None
+    chapter_title: str | None = None
+    run_id: str | None = None
+    memory_ids: list[str] = Field(default_factory=list)
+    source_urls: list[str] = Field(default_factory=list)
+    resolution_note: str = ""
+    created_at: datetime
+    updated_at: datetime
+    resolved_at: datetime | None = None
+
+
+class QualityIssueSummary(DomainModel):
+    total: int = Field(ge=0)
+    open: int = Field(ge=0)
+    resolved: int = Field(ge=0)
+    ignored: int = Field(ge=0)
+    error: int = Field(ge=0)
+    warning: int = Field(ge=0)
+    info: int = Field(ge=0)
+
+
+class QualityIssueListResponse(DomainModel):
+    issues: list[QualityIssue]
+    summary: QualityIssueSummary
+
+
+class QualityIssueUpdateRequest(DomainModel):
+    status: Literal["open", "resolved", "ignored"] | None = None
+    resolution_note: str | None = Field(default=None, max_length=2000)
+
+
+class QualityIssueRevisionRequest(DomainModel):
+    instruction: str | None = Field(default=None, max_length=10_000)
+
+
+class StoryBibleVersionSummary(DomainModel):
+    bible_id: str
+    project_id: str
+    version: int = Field(ge=1)
+    created_at: datetime
+    is_current: bool = False
+
+
+class BibleDiffResponse(DomainModel):
+    from_version: int = Field(ge=1)
+    to_version: int = Field(ge=1)
     unified_diff: str

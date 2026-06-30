@@ -8,6 +8,7 @@ from .manuscript_service import ManuscriptService
 from .memory_service import MemoryService
 from .ops_service import OpsService
 from .project_service import ProjectService
+from .quality_service import QualityReviewService
 from .research_service import ResearchService
 from .story_bible_service import StoryBibleService
 from .workflow_service import WorkflowService
@@ -21,6 +22,7 @@ __all__ = [
     "ManuscriptService",
     "OpsService",
     "ProjectService",
+    "QualityReviewService",
     "ResearchService",
     "StoryBibleService",
     "WorkflowService",

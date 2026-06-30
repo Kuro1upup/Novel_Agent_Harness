@@ -85,4 +85,7 @@ class MemoryConflict(ProjectResource):
     description: str
     memory_ids: list[str] = Field(default_factory=list)
     suggestion: str = ""
+    status: Literal["open", "resolved", "ignored"] = "open"
+    resolution_note: str = Field(default="", max_length=2000)
+    resolved_at: datetime | None = None
     resolved: bool = False

@@ -237,6 +237,12 @@ class ContinuityIssueORM(ProjectOwnedMixin, Base):
     )
     category: Mapped[str] = mapped_column(String(50), nullable=False)
     severity: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")
+
+    __table_args__ = (
+        Index("ix_continuity_project_status", "project_id", "status"),
+        Index("ix_continuity_draft_status", "draft_id", "status"),
+    )
 
 
 class FactRiskORM(ProjectOwnedMixin, Base):
@@ -246,6 +252,12 @@ class FactRiskORM(ProjectOwnedMixin, Base):
         String(36), ForeignKey("generation_results.id", ondelete="CASCADE")
     )
     risk_level: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")
+
+    __table_args__ = (
+        Index("ix_fact_risk_project_status", "project_id", "status"),
+        Index("ix_fact_risk_draft_status", "draft_id", "status"),
+    )
 
 
 class DocumentORM(ProjectOwnedMixin, Base):
@@ -447,9 +459,11 @@ class MemoryConflictORM(ProjectOwnedMixin, Base):
     )
     severity: Mapped[str] = mapped_column(String(20), nullable=False)
     category: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")
     resolved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     __table_args__ = (
+        Index("ix_memory_conflict_project_status", "project_id", "status"),
         Index("ix_memory_conflict_project_severity", "project_id", "severity"),
         Index("ix_memory_conflict_run", "run_id"),
     )

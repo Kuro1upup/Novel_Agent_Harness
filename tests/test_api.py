@@ -2,7 +2,9 @@ import httpx
 import pytest
 
 from novel_harness.api import create_app
+from novel_harness.models import ContinuityIssue, FactRisk, GenerationResult, MemoryConflict
 from novel_harness.providers.vectorstore import VectorRecord
+from novel_harness.storage.repositories import Repositories
 
 
 @pytest.mark.asyncio
@@ -182,3 +184,138 @@ async def test_api_updates_archives_and_restores_project(runtime) -> None:
         assert restored.status_code == 200
         assert restored.json()["archived_at"] is None
         assert (await client.get("/projects")).json()[0]["id"] == project_id
+
+
+@pytest.mark.asyncio
+async def test_api_quality_review_queue_and_issue_revision(runtime) -> None:
+    transport = httpx.ASGITransport(app=create_app(runtime=runtime))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        project_response = await client.post(
+            "/projects",
+            json={"name": "长安旧梦", "genre": "历史"},
+        )
+        project_id = project_response.json()["id"]
+
+        object_key = f"projects/{project_id}/drafts/source.md"
+        runtime.object_store.put_bytes(
+            object_key,
+            "林川进入长安，却突然说自己仍在洛阳。".encode(),
+            content_type="text/markdown; charset=utf-8",
+        )
+        with runtime.session_factory() as session:
+            repositories = Repositories(session)
+            draft = GenerationResult(
+                project_id=project_id,
+                body="林川进入长安，却突然说自己仍在洛阳。",
+                object_key=object_key,
+                creative_notes="待审校草稿",
+            )
+            repositories.generations.add(draft)
+            issue = ContinuityIssue(
+                project_id=project_id,
+                draft_id=draft.id,
+                category="timeline",
+                severity="error",
+                description="人物位置与上一章冲突",
+                evidence="上一章林川已入长安",
+                suggestion="统一为长安",
+            )
+            repositories.continuity_issues.add(issue)
+            repositories.fact_risks.add(
+                FactRisk(
+                    project_id=project_id,
+                    draft_id=draft.id,
+                    claim="长安城门制度",
+                    assessment="不确定",
+                    risk_level="unknown",
+                    reason="缺少资料来源",
+                    suggestion="补充史料依据",
+                )
+            )
+            repositories.memory_conflicts.add(
+                MemoryConflict(
+                    project_id=project_id,
+                    severity="soft",
+                    category="location",
+                    query="林川目前位于洛阳",
+                    description="长期记忆显示林川位于长安",
+                    memory_ids=["memory-1"],
+                    suggestion="确认最新位置",
+                )
+            )
+            session.commit()
+            issue_id = issue.id
+
+        listed = await client.get(f"/projects/{project_id}/quality/issues")
+        assert listed.status_code == 200, listed.text
+        payload = listed.json()
+        assert payload["summary"]["total"] == 3
+        assert payload["summary"]["open"] == 3
+        assert {item["issue_type"] for item in payload["issues"]} == {
+            "continuity",
+            "fact",
+            "memory",
+        }
+
+        updated = await client.patch(
+            f"/quality/issues/{issue_id}",
+            json={"status": "resolved", "resolution_note": "已通过修订处理"},
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["status"] == "resolved"
+        assert updated.json()["resolved_at"] is not None
+
+        open_only = await client.get(
+            f"/projects/{project_id}/quality/issues",
+            params={"issue_status": "open"},
+        )
+        assert open_only.status_code == 200
+        assert open_only.json()["summary"]["total"] == 2
+
+        revised = await client.post(
+            f"/quality/issues/{issue_id}/revise",
+            json={"instruction": "把人物位置统一为长安，并保留悬念。"},
+        )
+        assert revised.status_code == 200, revised.text
+        revised_draft = revised.json()["draft"]
+        assert revised_draft["parent_draft_id"] == draft.id
+        assert revised_draft["revision_number"] == 2
+
+
+@pytest.mark.asyncio
+async def test_api_story_bible_versions_and_diff(runtime) -> None:
+    transport = httpx.ASGITransport(app=create_app(runtime=runtime))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/projects",
+            json={"name": "长安旧梦", "genre": "历史"},
+        )
+        project_id = created.json()["id"]
+
+        bible = await client.get(f"/projects/{project_id}/bible")
+        assert bible.status_code == 200
+        assert bible.json()["version"] == 1
+
+        updated = await client.post(
+            f"/projects/{project_id}/bible/rules",
+            json={"value": "长安城门开闭受时辰约束", "expected_version": 1},
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["version"] == 2
+
+        versions = await client.get(f"/projects/{project_id}/bible/versions")
+        assert versions.status_code == 200
+        assert [item["version"] for item in versions.json()] == [2, 1]
+        assert versions.json()[0]["is_current"] is True
+
+        version_one = await client.get(f"/projects/{project_id}/bible/versions/1")
+        assert version_one.status_code == 200
+        assert version_one.json()["version"] == 1
+
+        diff = await client.get(
+            f"/projects/{project_id}/bible/diff",
+            params={"from_version": 1, "to_version": 2},
+        )
+        assert diff.status_code == 200, diff.text
+        assert diff.json()["from_version"] == 1
+        assert "长安城门开闭受时辰约束" in diff.json()["unified_diff"]

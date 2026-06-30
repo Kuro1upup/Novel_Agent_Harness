@@ -32,6 +32,7 @@ from novel_harness.models import (
     ResearchNote,
     SearchResult,
     StoryBible,
+    StoryBibleVersionSummary,
     StyleProfile,
     WorkflowEvent,
     WorkflowRun,
@@ -418,6 +419,39 @@ class StoryBibleRepository(JsonRepository[StoryBible]):
         record = self.session.scalar(statement)
         return StoryBible.model_validate(record.payload) if record else None
 
+    def list_versions(
+        self,
+        project_id: str,
+        *,
+        current_version: int,
+        limit: int = 1000,
+    ) -> list[StoryBibleVersionSummary]:
+        statement = (
+            select(StoryBibleVersionORM)
+            .where(StoryBibleVersionORM.project_id == project_id)
+            .order_by(StoryBibleVersionORM.version.desc())
+            .limit(limit)
+        )
+        owner_user_id = current_user_id()
+        if owner_user_id is not None:
+            statement = statement.join(
+                NovelProjectORM,
+                StoryBibleVersionORM.project_id == NovelProjectORM.id,
+            ).where(
+                NovelProjectORM.owner_user_id == owner_user_id,
+                NovelProjectORM.status == "active",
+            )
+        return [
+            StoryBibleVersionSummary(
+                bible_id=record.bible_id,
+                project_id=record.project_id,
+                version=record.version,
+                created_at=record.created_at,
+                is_current=record.version == current_version,
+            )
+            for record in self.session.scalars(statement)
+        ]
+
 
 class PlotPlanRepository(JsonRepository[PlotPlan]):
     domain_model = PlotPlan
@@ -624,7 +658,32 @@ class ContinuityIssueRepository(JsonRepository[ContinuityIssue]):
             "draft_id": model.draft_id,
             "category": model.category,
             "severity": model.severity,
+            "status": model.status,
         }
+
+    def list_for_project(
+        self,
+        project_id: str,
+        *,
+        status: str | None = None,
+        offset: int = 0,
+        limit: int = 1000,
+    ) -> list[ContinuityIssue]:
+        conditions: list[Any] = [ContinuityIssueORM.project_id == project_id]
+        if status is not None:
+            conditions.append(ContinuityIssueORM.status == status)
+        statement = (
+            select(ContinuityIssueORM)
+            .where(*conditions)
+            .order_by(ContinuityIssueORM.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        statement = self._scope_to_owner(statement)
+        return [
+            ContinuityIssue.model_validate(record.payload)
+            for record in self.session.scalars(statement)
+        ]
 
     def list_for_draft(self, draft_id: str) -> list[ContinuityIssue]:
         statement = (
@@ -644,7 +703,34 @@ class FactRiskRepository(JsonRepository[FactRisk]):
     orm_model = FactRiskORM
 
     def _extra_values(self, model: FactRisk) -> dict[str, Any]:
-        return {"draft_id": model.draft_id, "risk_level": model.risk_level}
+        return {
+            "draft_id": model.draft_id,
+            "risk_level": model.risk_level,
+            "status": model.status,
+        }
+
+    def list_for_project(
+        self,
+        project_id: str,
+        *,
+        status: str | None = None,
+        offset: int = 0,
+        limit: int = 1000,
+    ) -> list[FactRisk]:
+        conditions: list[Any] = [FactRiskORM.project_id == project_id]
+        if status is not None:
+            conditions.append(FactRiskORM.status == status)
+        statement = (
+            select(FactRiskORM)
+            .where(*conditions)
+            .order_by(FactRiskORM.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        statement = self._scope_to_owner(statement)
+        return [
+            FactRisk.model_validate(record.payload) for record in self.session.scalars(statement)
+        ]
 
     def list_for_draft(self, draft_id: str) -> list[FactRisk]:
         statement = (
@@ -1039,8 +1125,33 @@ class MemoryConflictRepository(JsonRepository[MemoryConflict]):
             "run_id": model.run_id,
             "severity": model.severity,
             "category": model.category,
+            "status": model.status,
             "resolved": model.resolved,
         }
+
+    def list_for_project(
+        self,
+        project_id: str,
+        *,
+        status: str | None = None,
+        offset: int = 0,
+        limit: int = 1000,
+    ) -> list[MemoryConflict]:
+        conditions: list[Any] = [MemoryConflictORM.project_id == project_id]
+        if status is not None:
+            conditions.append(MemoryConflictORM.status == status)
+        statement = (
+            select(MemoryConflictORM)
+            .where(*conditions)
+            .order_by(MemoryConflictORM.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        statement = self._scope_to_owner(statement)
+        return [
+            MemoryConflict.model_validate(record.payload)
+            for record in self.session.scalars(statement)
+        ]
 
 
 class Repositories:

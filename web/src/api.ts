@@ -4,6 +4,7 @@ import type {
   BillingBalance,
   BillingBills,
   BillingUsage,
+  BibleDiff,
   Draft,
   ManuscriptChapter,
   ManuscriptOutline,
@@ -12,7 +13,10 @@ import type {
   MemoryHit,
   PlotPlan,
   Project,
+  QualityIssue,
+  QualityIssueList,
   StoryBible,
+  StoryBibleVersionSummary,
   Workflow,
   WorkflowDetail,
 } from './types'
@@ -164,6 +168,14 @@ export const api = {
       },
     ),
   bible: (projectId: string) => request<StoryBible>(`/projects/${projectId}/bible`),
+  bibleVersions: (projectId: string) =>
+    request<StoryBibleVersionSummary[]>(`/projects/${projectId}/bible/versions`),
+  bibleVersion: (projectId: string, version: number) =>
+    request<StoryBible>(`/projects/${projectId}/bible/versions/${version}`),
+  bibleDiff: (projectId: string, fromVersion: number, toVersion: number) =>
+    request<BibleDiff>(
+      `/projects/${projectId}/bible/diff?from_version=${fromVersion}&to_version=${toVersion}`,
+    ),
   addBibleEntry: (
     projectId: string,
     kind: 'rules' | 'factions' | 'locations',
@@ -272,6 +284,34 @@ export const api = {
     }),
   diffDrafts: (fromId: string, toId: string) =>
     request<{ unified_diff: string }>(`/drafts/${fromId}/diff/${toId}`),
+  qualityIssues: (
+    projectId: string,
+    filters: {
+      issue_type?: 'continuity' | 'fact' | 'memory' | ''
+      issue_status?: 'open' | 'resolved' | 'ignored' | ''
+    } = {},
+  ) => {
+    const params = new URLSearchParams()
+    if (filters.issue_type) params.set('issue_type', filters.issue_type)
+    if (filters.issue_status) params.set('issue_status', filters.issue_status)
+    const query = params.toString()
+    return request<QualityIssueList>(
+      `/projects/${projectId}/quality/issues${query ? `?${query}` : ''}`,
+    )
+  },
+  updateQualityIssue: (
+    issueId: string,
+    payload: { status?: 'open' | 'resolved' | 'ignored'; resolution_note?: string },
+  ) =>
+    request<QualityIssue>(`/quality/issues/${issueId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  reviseFromQualityIssue: (issueId: string, instruction?: string) =>
+    request<{ draft: Draft }>(`/quality/issues/${issueId}/revise`, {
+      method: 'POST',
+      body: JSON.stringify({ instruction: instruction || undefined }),
+    }),
   workflows: (projectId: string) =>
     request<Workflow[]>(`/projects/${projectId}/workflows`),
   workflow: (runId: string) => request<WorkflowDetail>(`/workflows/${runId}`),
