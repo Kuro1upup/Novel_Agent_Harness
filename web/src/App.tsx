@@ -25,6 +25,7 @@ import {
   Send,
   Settings2,
   Sparkles,
+  Trash2,
   WalletCards,
   X,
 } from 'lucide-react'
@@ -331,6 +332,13 @@ function Workspace({ user, onLogout }: { user: AuthUser; onLogout: () => void })
                 setProjects((items) => items.map((item) => item.id === updated.id ? updated : item))
                 if (updated.status === 'archived') setTab('settings')
               }}
+              onDeleted={(deletedId) => {
+                const next = projects.filter((item) => item.id !== deletedId)
+                const selected = next.find((item) => item.status === 'active') || next[0]
+                setProjects(next)
+                setProjectId(selected?.id || '')
+                setTab(selected?.status === 'archived' ? 'settings' : 'overview')
+              }}
               feedback={feedback}
               fail={fail}
             />
@@ -479,15 +487,21 @@ function ProjectDialog({
 }) {
   const [name, setName] = useState('')
   const [genre, setGenre] = useState('历史')
+  const [subGenre, setSubGenre] = useState('')
   const [premise, setPremise] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   const create = async () => {
-    if (!name.trim()) return
+    if (!name.trim() || !genre.trim()) return
     setBusy(true)
     try {
-      onCreated(await api.createProject({ name, genre, premise }))
+      onCreated(await api.createProject({
+        name: name.trim(),
+        genre: genre.trim(),
+        sub_genre: subGenre.trim() || null,
+        premise,
+      }))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '创建失败')
     } finally {
@@ -509,7 +523,10 @@ function ProjectDialog({
           <button className="icon-button" onClick={onClose}><X size={18} /></button>
         </header>
         <Field label="作品名" value={name} onChange={setName} placeholder="例如：长安旧梦" />
-        <Field label="类型" value={genre} onChange={setGenre} placeholder="历史、玄幻、都市…" />
+        <div className="form-row">
+          <Field label="主类型" value={genre} onChange={setGenre} placeholder="历史、玄幻、都市…" />
+          <Field label="子类型" value={subGenre} onChange={setSubGenre} placeholder="西汉、克苏鲁、赛博…" />
+        </div>
         <Field
           label="一句话梗概"
           value={premise}
@@ -520,7 +537,7 @@ function ProjectDialog({
         {error && <p className="form-error">{error}</p>}
         <div className="button-row">
           <button className="secondary" onClick={onClose}>取消</button>
-          <button className="primary" disabled={busy || !name.trim()} onClick={() => void create()}>
+          <button className="primary" disabled={busy || !name.trim() || !genre.trim()} onClick={() => void create()}>
             {busy ? '创建中…' : '创建作品'}
           </button>
         </div>
@@ -532,11 +549,13 @@ function ProjectDialog({
 function ProjectSettings({
   project,
   onUpdated,
+  onDeleted,
   feedback,
   fail,
 }: {
   project: Project
   onUpdated: (project: Project) => void
+  onDeleted: (projectId: string) => void
   feedback: (message: string) => void
   fail: (reason: unknown) => void
 }) {
@@ -583,6 +602,27 @@ function ProjectSettings({
     )
   }
 
+  const deleteProject = async () => {
+    if (!window.confirm(`将永久删除作品“${project.name}”及其章节、草稿、设定、记忆和外部索引。此操作不可恢复，确认继续？`)) {
+      return
+    }
+    const confirmation = window.prompt('请输入作品名确认删除')
+    if (confirmation !== project.name) {
+      if (confirmation !== null) fail(new Error('作品名不匹配，已取消删除'))
+      return
+    }
+    setBusy(true)
+    try {
+      await api.deleteProject(project.id)
+      onDeleted(project.id)
+      feedback('作品已删除')
+    } catch (reason) {
+      fail(reason)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="page-stack">
       <section className="section-heading">
@@ -624,6 +664,16 @@ function ProjectSettings({
             {busy ? '保存中…' : '保存设置'}
           </button>
         </div>
+      </section>
+      <section className="settings-card danger-zone">
+        <div>
+          <span className="eyebrow">Danger zone</span>
+          <h3>删除作品</h3>
+          <p>永久删除该作品的章节、草稿、Story Bible、长期记忆、工作流记录、MinIO 对象和 Milvus 项目向量。</p>
+        </div>
+        <button className="danger-ghost" disabled={busy} onClick={() => void deleteProject()}>
+          <Trash2 size={16} />永久删除作品
+        </button>
       </section>
     </div>
   )
@@ -709,15 +759,21 @@ function BillingCenter({ fail }: { fail: (reason: unknown) => void }) {
 function ProjectOnboarding({ onCreated }: { onCreated: (project: Project) => void }) {
   const [name, setName] = useState('')
   const [genre, setGenre] = useState('历史')
+  const [subGenre, setSubGenre] = useState('')
   const [premise, setPremise] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   const create = async () => {
-    if (!name.trim()) return
+    if (!name.trim() || !genre.trim()) return
     setBusy(true)
     try {
-      onCreated(await api.createProject({ name, genre, premise }))
+      onCreated(await api.createProject({
+        name: name.trim(),
+        genre: genre.trim(),
+        sub_genre: subGenre.trim() || null,
+        premise,
+      }))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '创建失败')
     } finally {
@@ -736,7 +792,10 @@ function ProjectOnboarding({ onCreated }: { onCreated: (project: Project) => voi
       <div className="onboarding-card">
         <h2>创建第一部作品</h2>
         <Field label="作品名" value={name} onChange={setName} placeholder="例如：长安旧梦" />
-        <Field label="类型" value={genre} onChange={setGenre} placeholder="历史、玄幻、都市…" />
+        <div className="form-row">
+          <Field label="主类型" value={genre} onChange={setGenre} placeholder="历史、玄幻、都市…" />
+          <Field label="子类型" value={subGenre} onChange={setSubGenre} placeholder="西汉、克苏鲁、赛博…" />
+        </div>
         <Field
           label="一句话梗概"
           value={premise}
@@ -745,7 +804,7 @@ function ProjectOnboarding({ onCreated }: { onCreated: (project: Project) => voi
           multiline
         />
         {error && <p className="form-error">{error}</p>}
-        <button className="primary wide" onClick={() => void create()} disabled={busy || !name}>
+        <button className="primary wide" onClick={() => void create()} disabled={busy || !name.trim() || !genre.trim()}>
           {busy ? '创建中…' : '进入工作台'} <ChevronRight size={17} />
         </button>
       </div>

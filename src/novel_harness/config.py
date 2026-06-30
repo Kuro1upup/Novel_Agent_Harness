@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     redis_host: str = "localhost"
     redis_port: int = 20_005
     redis_password: str = "myredissecret"
-    redis_database: int = 0
+    redis_database: int = 1
     redis_cache_ttl_seconds: int = 900
 
     auth_required: bool = True

@@ -1,6 +1,9 @@
 package config
 
-import "os"
+import (
+	"os"
+	"strconv"
+)
 
 // Config holds all configuration for the billing service.
 type Config struct {
@@ -14,6 +17,7 @@ type Config struct {
 	RedisHost      string
 	RedisPort      string
 	RedisPassword  string
+	RedisDatabase  int
 	InternalAPIKey string
 	AdminPassword  string
 }
@@ -31,6 +35,7 @@ func Load() *Config {
 		RedisHost:     getEnv("REDIS_HOST", "localhost"),
 		RedisPort:     getEnv("REDIS_PORT", "20005"),
 		RedisPassword: getEnv("REDIS_PASSWORD", "myredissecret"),
+		RedisDatabase: getEnvInt("REDIS_DATABASE", 1),
 		InternalAPIKey: getEnv(
 			"BILLING_INTERNAL_API_KEY",
 			getEnv("INTERNAL_API_KEY", "internal-key-change-me"),
@@ -51,4 +56,16 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }

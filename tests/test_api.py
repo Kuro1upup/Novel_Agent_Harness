@@ -2,7 +2,15 @@ import httpx
 import pytest
 
 from novel_harness.api import create_app
-from novel_harness.models import ContinuityIssue, FactRisk, GenerationResult, MemoryConflict
+from novel_harness.models import (
+    ContinuityIssue,
+    Document,
+    DocumentChunk,
+    FactRisk,
+    GenerationResult,
+    MemoryConflict,
+    ResearchNote,
+)
 from novel_harness.providers.vectorstore import VectorRecord
 from novel_harness.storage.repositories import Repositories
 
@@ -184,6 +192,95 @@ async def test_api_updates_archives_and_restores_project(runtime) -> None:
         assert restored.status_code == 200
         assert restored.json()["archived_at"] is None
         assert (await client.get("/projects")).json()[0]["id"] == project_id
+
+
+@pytest.mark.asyncio
+async def test_api_deletes_project_and_external_artifacts(runtime) -> None:
+    transport = httpx.ASGITransport(app=create_app(runtime=runtime))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/projects",
+            json={"name": "待删除", "genre": "历史", "sub_genre": "西汉"},
+        )
+        project_id = created.json()["id"]
+
+        object_keys = {
+            f"projects/{project_id}/drafts/chapter.md",
+            f"projects/{project_id}/source/raw.txt",
+            f"projects/{project_id}/source/parsed.txt",
+            f"projects/{project_id}/chunks/0.txt",
+            f"projects/{project_id}/research/source.txt",
+        }
+        for key in object_keys:
+            runtime.object_store.put_bytes(key, b"content")
+        runtime.vector_store.upsert(
+            [
+                VectorRecord(
+                    id="document:test-delete",
+                    project_id=project_id,
+                    source_id="document-test",
+                    source_type="document",
+                    chunk_ordinal=0,
+                    content_hash="hash",
+                    embedding=[0.0] * runtime.embedding_provider.dimension,
+                )
+            ]
+        )
+
+        with runtime.session_factory() as session:
+            repositories = Repositories(session)
+            draft = GenerationResult(
+                project_id=project_id,
+                body="",
+                bible_version=1,
+                object_key=f"projects/{project_id}/drafts/chapter.md",
+            )
+            repositories.generations.add(draft)
+            document = Document(
+                project_id=project_id,
+                filename="raw.txt",
+                mime_type="text/plain",
+                size_bytes=7,
+                content_hash="document-hash",
+                object_key=f"projects/{project_id}/source/raw.txt",
+                parsed_object_key=f"projects/{project_id}/source/parsed.txt",
+                status="ready",
+            )
+            repositories.documents.add(document)
+            repositories.document_chunks.add(
+                DocumentChunk(
+                    project_id=project_id,
+                    document_id=document.id,
+                    ordinal=0,
+                    content_hash="chunk-hash",
+                    object_key=f"projects/{project_id}/chunks/0.txt",
+                    status="ready",
+                )
+            )
+            repositories.research.add(
+                ResearchNote(
+                    project_id=project_id,
+                    topic="长安",
+                    query="长安",
+                    source_title="资料",
+                    source_url="https://example.test/source",
+                    source_object_key=f"projects/{project_id}/research/source.txt",
+                )
+            )
+            session.commit()
+
+        archived = await client.patch(
+            f"/projects/{project_id}",
+            json={"status": "archived"},
+        )
+        assert archived.status_code == 200
+
+        deleted = await client.delete(f"/projects/{project_id}")
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json() == {"deleted": True}
+        assert (await client.get(f"/projects/{project_id}")).status_code == 404
+        assert all(not runtime.object_store.exists(key) for key in object_keys)
+        assert runtime.vector_store.records == {}
 
 
 @pytest.mark.asyncio

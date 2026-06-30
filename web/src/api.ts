@@ -117,6 +117,10 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
+  deleteProject: (projectId: string) =>
+    request<{ deleted: boolean }>(`/projects/${projectId}`, {
+      method: 'DELETE',
+    }),
   manuscript: (projectId: string) =>
     request<ManuscriptOutline>(`/projects/${projectId}/manuscript`),
   createVolume: (

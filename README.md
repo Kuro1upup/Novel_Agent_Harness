@@ -57,7 +57,9 @@ Milvus 的写入使用 pending/ready 状态与补偿删除，避免不可追踪�
 
 ## 安装
 
-要求 Python 3.11+、MySQL 8+、Milvus 2.x、MinIO；Redis 7 为可选加速层。
+要求 Python 3.11+、Go 1.22+、Node.js 20+、MySQL 8+、Milvus 2.x、MinIO；
+Redis 7 为可选加速层。Auth 与 Billing 是 Go 服务，`apt install golang-go`
+如果只能安装 Go 1.21，则不要使用该方式。
 
 ```bash
 python -m venv .venv
@@ -66,42 +68,34 @@ pip install -e ".[dev]"
 cp .env.example .env
 ```
 
-本地开发可启动随项目提供的基础设施：
+本地开发推荐直接复用已有 `support-*` 中间件容器，不需要用本仓库的
+`docker-compose.yml` 打包部署应用服务。先确认以下容器已经运行：
 
 ```bash
-make local-up
-make local-bootstrap
-novel-harness infra check
-novel-harness db init
+docker ps --format 'table {{.Names}}\t{{.Ports}}' | grep '^support-'
 ```
 
-`make local-bootstrap` 会在容器内提示输入本地账号密码，默认创建
-`author@local.test`，并把 `owner_user_id=0` 的历史作品分配给该账号。已有账号的密码
-默认不会改变；需要重置时使用
-`novel-harness db bootstrap-local-user --reset-password`。
-初始余额初始化使用幂等键，Billing 临时不可用时命令会失败，可在 Billing 恢复后重跑。
-
-停止整套本地服务：
-
-```bash
-make local-down
-```
-
-`docker-compose.yml` 使用以下端口：
+默认复用的 support 中间件端口：
 
 - MySQL：`localhost:3306`
 - MinIO S3 API：`localhost:20000`
 - MinIO Console：`localhost:20001`
 - Milvus：`localhost:19530`
+- Milvus metrics：`localhost:20002`
 - Redis：`localhost:20005`
-- Auth：`localhost:8001`（由 API 网关通过 `/api/auth/*` 转发）
-- Billing：`localhost:8002`（由 API 网关通过 `/api/billing/*` 转发）
+
+应用服务直接在命令行启动：
+
+- Auth：`localhost:8001`
+- Billing：`localhost:8002`
 - API：`localhost:8000`
 - Web：`localhost:5173`
 
 MySQL 使用同一个实例中的三个数据库：`novel_agent` 保存创作数据，`novel_auth`
 保存用户，`novel_billing` 保存余额和账单。`novel-harness db init` 会创建三个库；
-默认兼容旧配置使用同一个受限应用账户，也可以为 Auth/Billing 配置独立库账号。
+默认兼容旧配置使用同一个受限应用账户，也可以为 Auth/Billing 配置独立库账号。Milvus
+使用独立 collection，MinIO 使用独立 bucket，Redis 使用独立数据库编号，避免和其他
+项目数据混用。
 
 建议的本地 `.env`：
 
@@ -110,7 +104,7 @@ DATABASE_HOST=localhost
 DATABASE_PORT=3306
 DATABASE_NAME=novel_agent
 DATABASE_ROOT_USER=root
-DATABASE_ROOT_PASSWORD=root_password
+DATABASE_ROOT_PASSWORD=你的 support-mysql root 密码
 DATABASE_USER=novel_agent
 DATABASE_PASSWORD=novel_agent_password
 
@@ -139,13 +133,13 @@ MINIO_BUCKET=novel-agent
 
 MILVUS_HOST=localhost
 MILVUS_PORT=19530
-MILVUS_COLLECTION=novel_chunks_qwen_v4_1024
+MILVUS_COLLECTION=novel_agent_chunks_qwen_v4_1024
 
 CACHE_PROVIDER=redis
 REDIS_HOST=localhost
 REDIS_PORT=20005
 REDIS_PASSWORD=myredissecret
-REDIS_DATABASE=0
+REDIS_DATABASE=1
 
 EMBEDDING_PROVIDER=qwen
 EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
@@ -180,11 +174,30 @@ Auth 与 Billing 必须使用相同的 `JWT_SECRET`。Python API 调用 Auth 内
 
 ```bash
 cd /home/gxl77/codex_dev
+
+# 确认本机已安装 Go 1.22+；如果没有 go 命令，先安装 Go。
+go version
+
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
+cp auth/.env.example auth/.env
+cp billing/.env.example billing/.env
+
+cd web
+npm install
+cd ..
 ```
+
+检查并按本机 support 栈实际密码修改 `.env`、`auth/.env` 和 `billing/.env`。三处需要
+保持一致的关键项包括：
+
+- `JWT_SECRET`
+- `AUTH_INTERNAL_API_KEY`
+- `BILLING_INTERNAL_API_KEY`
+- MySQL 用户、密码和库名
+- MinIO/Redis 连接信息；Billing 的 `REDIS_DATABASE` 建议与 Python 后端保持一致
 
 没有外部模型密钥时，可以在 `.env` 中使用离线 Provider：
 
@@ -198,30 +211,41 @@ CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:5173
 
 ### 启动后端
 
-首次启动或拉取到新迁移后，先升级数据库：
+首次启动或拉取到新迁移后，先初始化隔离数据库、账号和迁移：
 
 ```bash
 cd /home/gxl77/codex_dev
 source .venv/bin/activate
+novel-harness db init
 novel-harness db migrate
+novel-harness infra check
 ```
 
-本地直接运行 Go 服务：
+分别在两个终端启动 Go 服务：
 
 ```bash
-(cd billing && go run ./cmd/server)
-(cd auth && go run ./cmd/server)
+cd /home/gxl77/codex_dev/billing
+go run ./cmd/server
 ```
 
-两个服务启动后初始化本地账号：
+```bash
+cd /home/gxl77/codex_dev/auth
+go run ./cmd/server
+```
+
+两个 Go 服务启动后，在 Python 虚拟环境终端初始化本地账号：
 
 ```bash
+cd /home/gxl77/codex_dev
+source .venv/bin/activate
 novel-harness db bootstrap-local-user --email author@local.test
 ```
 
-启动 FastAPI 开发服务器：
+再启动 FastAPI 开发服务器：
 
 ```bash
+cd /home/gxl77/codex_dev
+source .venv/bin/activate
 uvicorn novel_harness.api:app \
   --host 127.0.0.1 \
   --port 8000 \
@@ -241,7 +265,6 @@ uvicorn novel_harness.api:app \
 
 ```bash
 cd /home/gxl77/codex_dev/web
-npm install
 VITE_API_URL=http://127.0.0.1:8000 npm run dev
 ```
 
@@ -263,6 +286,16 @@ novel-harness worker
 novel-harness worker --once
 novel-harness worker --drain
 ```
+
+### 可选：Docker Compose 打包路径
+
+日常本地开发不需要 `make local-up`，也不需要把 Go 服务、Python API 和前端打成镜像。
+直接按上面的命令启动各服务即可，代码变更反馈更快，日志也更容易定位。
+
+仓库保留 `docker-compose.yml` 只作为整套应用打包、自检或临时隔离运行使用。为避免和
+已有 `support-*` 容器冲突，Compose 默认映射到另一组宿主机端口，例如 MySQL
+`33306`、MinIO `21000`、Milvus `29530`、Redis `21005`。如果只是本机个人开发，
+优先使用前文的 support 中间件连接方式。
 
 默认日志写入 `logs/novel-harness.log`。本地开发常用检查命令：
 

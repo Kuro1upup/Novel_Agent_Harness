@@ -304,6 +304,19 @@ def create_app(
             **payload.model_dump(exclude_unset=True),
         )
 
+    @app.delete("/projects/{project_id}")
+    async def delete_project(
+        project_id: str,
+        session: SessionDep,
+        rt: RuntimeDep,
+    ) -> dict[str, bool]:
+        deleted = ProjectService(session).delete(
+            project_id,
+            object_store=rt.object_store,
+            vector_store=rt.vector_store,
+        )
+        return {"deleted": deleted}
+
     @app.get(
         "/projects/{project_id}/manuscript",
         response_model=ManuscriptOutline,

@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from novel_harness.exceptions import ProjectArchivedError
 from novel_harness.models import ManuscriptVolume, NovelProject, StoryBible, utc_now
+from novel_harness.storage.orm import (
+    DocumentChunkORM,
+    DocumentORM,
+    GenerationResultORM,
+    ResearchNoteORM,
+)
 from novel_harness.storage.repositories import Repositories
 
 
@@ -77,3 +86,47 @@ class ProjectService:
         if not values:
             return project
         return self.repositories.projects.update(project.model_copy(update=values))
+
+    def delete(
+        self,
+        project_id: str,
+        *,
+        object_store: Any | None = None,
+        vector_store: Any | None = None,
+    ) -> bool:
+        """Permanently delete a project and its external artifacts.
+
+        The MySQL schema cascades project-owned relational rows. Before removing
+        the project row, delete known MinIO objects and project-scoped vectors so
+        a hard delete does not leave large orphaned artifacts behind.
+        """
+
+        project = self.repositories.projects.require(project_id, include_archived=True)
+        object_keys = self._object_keys(project.id)
+        if vector_store is not None:
+            vector_store.delete(project_id=project.id)
+        if object_store is not None:
+            for key in object_keys:
+                object_store.remove(key)
+        return self.repositories.projects.delete(project.id)
+
+    def _object_keys(self, project_id: str) -> tuple[str, ...]:
+        keys: set[str] = set()
+        payload_fields = (
+            (GenerationResultORM, ("object_key",)),
+            (DocumentORM, ("object_key", "parsed_object_key")),
+            (DocumentChunkORM, ("object_key",)),
+            (ResearchNoteORM, ("source_object_key",)),
+        )
+        for orm_model, fields in payload_fields:
+            statement = select(orm_model.payload).where(orm_model.project_id == project_id)
+            for payload in self.session.scalars(statement):
+                for field in fields:
+                    _add_key(keys, payload.get(field))
+
+        return tuple(sorted(keys))
+
+
+def _add_key(keys: set[str], key: str | None) -> None:
+    if key:
+        keys.add(key)

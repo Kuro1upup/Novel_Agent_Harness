@@ -145,6 +145,16 @@ async def test_api_requires_auth_and_isolates_projects_by_user(runtime) -> None:
             headers={"Authorization": "Bearer user-12"},
         )
         assert hidden.status_code == 404
+        denied_delete = await client.delete(
+            f"/projects/{project_id}",
+            headers={"Authorization": "Bearer user-12"},
+        )
+        assert denied_delete.status_code == 404
+        still_owned = await client.get(
+            f"/projects/{project_id}",
+            headers={"Authorization": "Bearer user-11"},
+        )
+        assert still_owned.status_code == 200
 
 
 @pytest.mark.asyncio
